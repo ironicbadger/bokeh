@@ -1,0 +1,15 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY frontend/package*.json ./
+
+# Install dependencies  
+RUN npm install
+
+# Note: In dev mode, the code is mounted via volume, not copied
+
+EXPOSE 3000
+
+CMD ["npm", "run", "dev"]

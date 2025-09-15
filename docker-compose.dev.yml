@@ -1,0 +1,91 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: photos
+      POSTGRES_USER: photouser
+      POSTGRES_PASSWORD: photopass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U photouser -d photos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend.dev
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://photouser:photopass@postgres:5432/photos
+      - REDIS_URL=redis://redis:6379
+      - PHOTOS_PATH=/photos
+      - THUMBNAILS_PATH=/app/thumbnails
+      - SECRET_KEY=dev-secret-key
+      - DEBUG=true
+    volumes:
+      - ./backend:/app
+      - /Users/alex/Pictures/test-images:/photos:ro
+      - ./thumbnails:/app/thumbnails
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend.dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+    depends_on:
+      - backend
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend.dev
+    command: watchmedo auto-restart -d /app -p '*.py' -- celery -A worker worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://photouser:photopass@postgres:5432/photos
+      - REDIS_URL=redis://redis:6379
+      - PHOTOS_PATH=/photos
+      - THUMBNAILS_PATH=/app/thumbnails
+      - DEBUG=true
+    volumes:
+      - ./backend:/app
+      - /Users/alex/Pictures/test-images:/photos:ro
+      - ./thumbnails:/app/thumbnails
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

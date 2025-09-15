@@ -1,0 +1,666 @@
+openapi: 3.0.0
+info:
+  title: Photo Management API
+  version: 1.0.0
+  description: API for photo management application with RAW/HEIF support
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Development server
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [admin, user]
+        created_at:
+          type: string
+          format: date-time
+
+    Photo:
+      type: object
+      properties:
+        id:
+          type: integer
+        filename:
+          type: string
+        file_size:
+          type: integer
+        mime_type:
+          type: string
+        width:
+          type: integer
+        height:
+          type: integer
+        date_taken:
+          type: string
+          format: date-time
+        camera_make:
+          type: string
+        camera_model:
+          type: string
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        is_favorite:
+          type: boolean
+        thumbnails:
+          type: object
+          properties:
+            "150":
+              type: string
+            "400":
+              type: string
+            "1200":
+              type: string
+
+    PhotoList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Photo'
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+            per_page:
+              type: integer
+            total:
+              type: integer
+            cursor:
+              type: string
+
+    Folder:
+      type: object
+      properties:
+        id:
+          type: integer
+        path:
+          type: string
+        name:
+          type: string
+        parent_id:
+          type: integer
+        photo_count:
+          type: integer
+        total_size:
+          type: integer
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/Folder'
+
+    Job:
+      type: object
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+          enum: [directory_scan, thumbnail_generation, metadata_extraction]
+        status:
+          type: string
+          enum: [pending, running, completed, failed, cancelled]
+        progress:
+          type: number
+          minimum: 0
+          maximum: 100
+        total_items:
+          type: integer
+        processed_items:
+          type: integer
+        error_message:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    SystemStats:
+      type: object
+      properties:
+        total_photos:
+          type: integer
+        total_size:
+          type: integer
+        disk_usage:
+          type: object
+          properties:
+            used:
+              type: integer
+            available:
+              type: integer
+            percentage:
+              type: number
+        active_jobs:
+          type: integer
+        version:
+          type: string
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+
+security:
+  - BearerAuth: []
+
+paths:
+  /auth/login:
+    post:
+      summary: User login
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+              required: [username, password]
+      responses:
+        200:
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  refresh_token:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/User'
+        401:
+          description: Invalid credentials
+
+  /auth/refresh:
+    post:
+      summary: Refresh access token
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        200:
+          description: Token refreshed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+
+  /auth/logout:
+    post:
+      summary: User logout
+      tags: [Authentication]
+      responses:
+        204:
+          description: Logout successful
+
+  /photos:
+    get:
+      summary: List photos
+      tags: [Photos]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: folder_id
+          in: query
+          schema:
+            type: integer
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [date_taken, filename, size, rating]
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+        - name: cursor
+          in: query
+          description: Cursor for pagination
+          schema:
+            type: string
+      responses:
+        200:
+          description: List of photos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhotoList'
+
+    post:
+      summary: Import photos
+      tags: [Photos]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                directory_id:
+                  type: integer
+                scan_type:
+                  type: string
+                  enum: [full, incremental, verification]
+                paths:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        202:
+          description: Import job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+
+  /photos/{id}:
+    get:
+      summary: Get photo details
+      tags: [Photos]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        200:
+          description: Photo details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Photo'
+        404:
+          description: Photo not found
+
+    put:
+      summary: Update photo metadata
+      tags: [Photos]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rating:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                is_favorite:
+                  type: boolean
+      responses:
+        200:
+          description: Photo updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Photo'
+
+    delete:
+      summary: Delete photo
+      tags: [Photos]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        204:
+          description: Photo deleted
+
+  /photos/{id}/metadata:
+    get:
+      summary: Get full photo metadata
+      tags: [Photos]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        200:
+          description: Full metadata
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /photos/duplicates:
+    get:
+      summary: Find duplicate photos
+      tags: [Photos]
+      responses:
+        200:
+          description: Duplicate photo groups
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    hash:
+                      type: string
+                    photos:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Photo'
+
+  /folders:
+    get:
+      summary: Get folder tree
+      tags: [Folders]
+      parameters:
+        - name: directory_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        200:
+          description: Folder tree
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Folder'
+
+  /folders/{id}:
+    get:
+      summary: Get folder contents
+      tags: [Folders]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        200:
+          description: Folder details with photos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  folder:
+                    $ref: '#/components/schemas/Folder'
+                  photos:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Photo'
+
+  /folders/scan:
+    post:
+      summary: Trigger directory scan
+      tags: [Folders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                directory_id:
+                  type: integer
+                scan_type:
+                  type: string
+                  enum: [full, incremental, verification]
+              required: [directory_id, scan_type]
+      responses:
+        202:
+          description: Scan job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+
+  /thumbnails/{photo_id}/{size}:
+    get:
+      summary: Get thumbnail
+      tags: [Thumbnails]
+      parameters:
+        - name: photo_id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: size
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: ["150", "400", "1200"]
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [webp, jpeg]
+            default: webp
+      responses:
+        200:
+          description: Thumbnail image
+          content:
+            image/webp:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        404:
+          description: Thumbnail not found
+
+  /thumbnails/regenerate:
+    post:
+      summary: Regenerate thumbnails
+      tags: [Thumbnails]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                photo_ids:
+                  type: array
+                  items:
+                    type: integer
+                sizes:
+                  type: array
+                  items:
+                    type: string
+                    enum: ["150", "400", "1200"]
+      responses:
+        202:
+          description: Regeneration job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+
+  /jobs:
+    get:
+      summary: List jobs
+      tags: [Jobs]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, running, completed, failed, cancelled]
+        - name: type
+          in: query
+          schema:
+            type: string
+      responses:
+        200:
+          description: List of jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Job'
+
+  /jobs/{id}:
+    get:
+      summary: Get job status
+      tags: [Jobs]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        200:
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+
+  /jobs/{id}/cancel:
+    post:
+      summary: Cancel job
+      tags: [Jobs]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        200:
+          description: Job cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+
+  /system/stats:
+    get:
+      summary: Get system statistics
+      tags: [System]
+      responses:
+        200:
+          description: System statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemStats'
+
+  /system/health:
+    get:
+      summary: Health check
+      tags: [System]
+      security: []
+      responses:
+        200:
+          description: System healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy]
+                  services:
+                    type: object
+                    properties:
+                      database:
+                        type: boolean
+                      redis:
+                        type: boolean
+                      storage:
+                        type: boolean
+
+  /system/settings:
+    get:
+      summary: Get system settings
+      tags: [System]
+      responses:
+        200:
+          description: System settings
+          content:
+            application/json:
+              schema:
+                type: object
+
+    put:
+      summary: Update system settings
+      tags: [System]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        200:
+          description: Settings updated
