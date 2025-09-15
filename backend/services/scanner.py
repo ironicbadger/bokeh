@@ -17,7 +17,8 @@ class DirectoryScanner:
         self.photos_path = os.getenv("PHOTOS_PATH", "/photos")
         self.supported_extensions = {
             '.jpg', '.jpeg', '.png', '.gif', '.bmp', 
-            '.tiff', '.tif', '.webp', '.heic', '.heif'
+            '.tiff', '.tif', '.webp', '.heic', '.heif',
+            '.cr3', '.cr2', '.nef', '.arw', '.dng', '.raf', '.orf'
         }
         self.photos_to_process = []  # Collect photo IDs for thumbnail generation
         self.thumbnail_job_id = None  # Track thumbnail job

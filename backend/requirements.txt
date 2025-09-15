@@ -17,3 +17,4 @@ python-magic==0.4.27
 aiofiles==23.2.1
 httpx==0.25.2
 watchdog==3.0.0
+rawpy==0.19.1

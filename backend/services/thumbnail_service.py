@@ -5,9 +5,17 @@ from sqlalchemy.orm import Session
 from models import Photo, Thumbnail
 from typing import Dict, List
 import pillow_heif
+import numpy as np
 
 # Register HEIF opener with PIL
 pillow_heif.register_heif_opener()
+
+# Try to import rawpy for RAW file support
+try:
+    import rawpy
+    RAWPY_AVAILABLE = True
+except ImportError:
+    RAWPY_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +41,23 @@ class ThumbnailService:
         generated = {}
         
         try:
-            # Open the original image
-            with Image.open(photo.filepath) as img:
+            # Check if it's a RAW file that needs special handling
+            file_ext = os.path.splitext(photo.filepath)[1].lower()
+            
+            if file_ext in ['.cr3', '.cr2', '.nef', '.arw', '.dng', '.raf', '.orf'] and RAWPY_AVAILABLE:
+                # Handle RAW files with rawpy
+                try:
+                    with rawpy.imread(photo.filepath) as raw:
+                        rgb = raw.postprocess()
+                        img = Image.fromarray(rgb)
+                except Exception as e:
+                    logger.warning(f"Failed to process RAW file with rawpy: {e}, falling back to PIL")
+                    img = Image.open(photo.filepath)
+            else:
+                # Open regular image files or fall back to PIL
+                img = Image.open(photo.filepath)
+            
+            with img:
                 # Apply rotation if needed
                 if apply_rotation:
                     total_rotation = (photo.rotation_applied + photo.user_rotation) % 360

@@ -32,10 +32,10 @@ async def get_full_image(
     file_ext = os.path.splitext(photo.filepath)[1].lower()
     
     # For TIF/TIFF files and other formats that browsers can't display, convert to JPEG
-    if file_ext in ['.tif', '.tiff', '.nef', '.cr2', '.arw', '.dng']:
+    if file_ext in ['.tif', '.tiff', '.nef', '.cr2', '.cr3', '.arw', '.dng', '.raf', '.orf']:
         try:
             # Try to handle RAW files with rawpy if available
-            if file_ext in ['.nef', '.cr2', '.arw', '.dng']:
+            if file_ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raf', '.orf']:
                 try:
                     import rawpy
                     with rawpy.imread(full_path) as raw:
@@ -217,6 +217,19 @@ async def regenerate_thumbnails(
 ):
     """Regenerate thumbnails for all photos"""
     try:
+        # Check if there's already a thumbnail job running
+        from models import Job, JobStatus, JobType
+        running_thumbnail_job = db.query(Job).filter(
+            Job.type == JobType.THUMBNAIL_GENERATION,
+            Job.status == JobStatus.RUNNING
+        ).first()
+        
+        if running_thumbnail_job:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Thumbnail generation job {running_thumbnail_job.id} is already running. Please wait for it to complete."
+            )
+        
         # Import here to avoid circular dependency
         from tasks.thumbnails import regenerate_all_thumbnails
         

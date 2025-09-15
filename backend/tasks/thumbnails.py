@@ -9,9 +9,19 @@ from sqlalchemy.orm import Session
 from models import get_db, Photo, Job, JobType, JobStatus, Thumbnail
 from PIL import Image
 import pillow_heif
+import numpy as np
 
 # Register HEIF opener
 pillow_heif.register_heif_opener()
+
+# Try to import rawpy for RAW file support
+try:
+    import rawpy
+    RAWPY_AVAILABLE = True
+except ImportError:
+    RAWPY_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("rawpy not available - RAW file support disabled")
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +59,26 @@ class ThumbnailWorker:
         }
         
         try:
+            # Check if it's a RAW file that needs special handling
+            file_ext = os.path.splitext(filepath)[1].lower()
+            
+            if file_ext in ['.cr3', '.cr2', '.nef', '.arw', '.dng', '.raf', '.orf'] and RAWPY_AVAILABLE:
+                # Handle RAW files with rawpy
+                try:
+                    with rawpy.imread(filepath) as raw:
+                        rgb = raw.postprocess()
+                        img = Image.fromarray(rgb)
+                except Exception as e:
+                    logger.warning(f"Failed to process RAW file {filepath} with rawpy: {e}")
+                    # Try to fall back to PIL (though it likely won't work)
+                    img = Image.open(filepath)
+            else:
+                # Open regular image files
+                img = Image.open(filepath)
+            
             # Open and process the image
             from PIL import ImageOps
-            with Image.open(filepath) as img:
+            with img:
                 # Apply EXIF orientation if present
                 try:
                     img = ImageOps.exif_transpose(img) or img
@@ -238,10 +265,16 @@ def process_thumbnail_batch(self: Task, photo_ids: List[int], job_id: int = None
         if job:
             # Refresh job to get current state
             job = db.query(Job).filter(Job.id == job_id).first()
-            # Add any remaining items not yet counted
-            remaining = (processed + failed) % PROGRESS_UPDATE_INTERVAL
-            if remaining > 0:
-                job.processed_items = (job.processed_items or 0) + remaining
+            # The batch is complete, add all processed items from this batch
+            # (not just the remainder from progress updates)
+            batch_total = processed + failed
+            if batch_index is not None and total_photos is not None:
+                # We know exactly which batch this is, calculate expected items processed
+                expected_processed = min((batch_index + 1) * THUMBNAIL_BATCH_SIZE, total_photos)
+                job.processed_items = expected_processed
+            else:
+                # Fallback: increment by batch size
+                job.processed_items = (job.processed_items or 0) + batch_total
             
             # Check if all photos are processed
             if job.total_items and job.processed_items and job.processed_items >= job.total_items:
@@ -320,10 +353,25 @@ def regenerate_all_thumbnails(force: bool = False):
     db = next(get_db())
     
     try:
+        # Check if there's already a thumbnail job running
+        existing_job = db.query(Job).filter(
+            Job.type == JobType.THUMBNAIL_GENERATION,
+            Job.status == JobStatus.RUNNING
+        ).first()
+        
+        if existing_job:
+            logger.warning(f"Thumbnail generation job {existing_job.id} is already running, skipping new job")
+            return {
+                'error': 'Thumbnail job already running',
+                'existing_job_id': existing_job.id,
+                'progress': existing_job.progress
+            }
+        
         # Create a job for tracking
         job = Job(
             type=JobType.THUMBNAIL_GENERATION,
-            status=JobStatus.PENDING,
+            status=JobStatus.RUNNING,  # Set to RUNNING immediately to prevent race conditions
+            started_at=datetime.utcnow(),
             payload={'force': force, 'workers': MAX_THUMBNAIL_WORKERS, 'regenerate': True}
         )
         db.add(job)

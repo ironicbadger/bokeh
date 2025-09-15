@@ -7,6 +7,11 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     libmagic1 \
     libheif-dev \
+    libde265-dev \
+    libjpeg-dev \
+    libpng-dev \
+    libwebp-dev \
+    libraw-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
