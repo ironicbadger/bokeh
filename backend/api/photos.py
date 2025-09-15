@@ -64,6 +64,8 @@ async def list_photos(
             "camera_model": photo.camera_model,
             "rating": photo.rating,
             "is_favorite": photo.is_favorite,
+            "rotation_version": photo.rotation_version or 0,
+            "final_rotation": photo.final_rotation or 0,
             "thumbnails": {
                 "150": f"/api/v1/thumbnails/{photo.id}/150",
                 "400": f"/api/v1/thumbnails/{photo.id}/400",
@@ -149,8 +151,10 @@ async def update_photo_rotation(
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
     
-    # Update user rotation
+    # Update user rotation and increment version
     photo.user_rotation = rotation
+    photo.rotation_version = (photo.rotation_version or 0) + 1
+    photo.final_rotation = (photo.rotation_applied + rotation) % 360
     db.commit()
     
     # Queue thumbnail regeneration with new rotation
@@ -161,5 +165,6 @@ async def update_photo_rotation(
         "message": "Rotation updated", 
         "photo_id": photo_id,
         "user_rotation": rotation,
-        "total_rotation": (photo.rotation_applied + rotation) % 360
+        "final_rotation": photo.final_rotation,
+        "rotation_version": photo.rotation_version
     }

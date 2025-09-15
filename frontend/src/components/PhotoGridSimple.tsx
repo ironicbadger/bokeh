@@ -1,23 +1,32 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { Photo } from '@/lib/api'
 import { Loader2 } from 'lucide-react'
-import dynamic from 'next/dynamic'
-
-// Lazy load the ImageViewer for better performance
-const ImageViewer = dynamic(() => import('./ImageViewer'), { ssr: false })
+import ImageViewer from './ImageViewerNew'
 
 interface PhotoGridProps {
   photos: Photo[]
   onLoadMore: () => void
   hasMore: boolean
   isLoading: boolean
+  thumbnailVersions?: Map<number, number>  // Map of photo ID to thumbnail version
+  onPhotoClick?: (photoIndex: number) => void
+  onRotationUpdate?: (photoId: number, thumbnailVersion: number) => void
 }
 
-export default function PhotoGridSimple({ photos, onLoadMore, hasMore, isLoading }: PhotoGridProps) {
+export default function PhotoGridSimple({ photos, onLoadMore, hasMore, isLoading, thumbnailVersions, onPhotoClick, onRotationUpdate }: PhotoGridProps) {
   const observerTarget = useRef<HTMLDivElement>(null)
   const [loadingImages, setLoadingImages] = useState<Set<number>>(new Set())
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerIndex, setViewerIndex] = useState(0)
+  const [localThumbnailVersions, setLocalThumbnailVersions] = useState<Map<number, number>>(thumbnailVersions || new Map())
+  const [recentlyRotated, setRecentlyRotated] = useState<Map<number, number>>(new Map()) // Map of photoId to timestamp
+  
+  // Update local versions when prop changes
+  useEffect(() => {
+    if (thumbnailVersions) {
+      setLocalThumbnailVersions(thumbnailVersions)
+    }
+  }, [thumbnailVersions])
 
   const handleObserver = useCallback((entries: IntersectionObserverEntry[]) => {
     const [target] = entries
@@ -40,12 +49,27 @@ export default function PhotoGridSimple({ photos, onLoadMore, hasMore, isLoading
   }, [handleObserver])
 
   const getThumbnailUrl = (photo: Photo) => {
-    return `http://localhost:8000/api/v1/thumbnails/${photo.id}/400`
+    const baseUrl = `http://localhost:8000/api/v1/thumbnails/${photo.id}/400`
+    // Use rotation_version from photo object or local version map
+    const version = localThumbnailVersions.get(photo.id) || photo.rotation_version || 0
+    // Add timestamp for photos that were just rotated to force refresh
+    const rotationTimestamp = recentlyRotated.get(photo.id)
+    if (rotationTimestamp && version) {
+      // Use the stored timestamp for consistent URL until cleared
+      return `${baseUrl}?v=${version}&_t=${rotationTimestamp}`
+    }
+    return version ? `${baseUrl}?v=${version}` : baseUrl
   }
   
   const handlePhotoClick = (photoIndex: number) => {
-    setViewerIndex(photoIndex)
-    setViewerOpen(true)
+    console.log('Photo clicked:', { photoIndex, hasOnPhotoClick: !!onPhotoClick })
+    if (onPhotoClick) {
+      onPhotoClick(photoIndex)
+    } else {
+      console.log('Opening internal viewer')
+      setViewerIndex(photoIndex)
+      setViewerOpen(true)
+    }
   }
 
   // Dynamically determine columns based on screen width
@@ -192,7 +216,64 @@ export default function PhotoGridSimple({ photos, onLoadMore, hasMore, isLoading
         <ImageViewer
           photos={photos}
           initialIndex={viewerIndex}
-          onClose={() => setViewerOpen(false)}
+          onClose={() => {
+            setViewerOpen(false)
+            // Clear recently rotated after a delay to allow images to load
+            setTimeout(() => {
+              setRecentlyRotated(new Map())
+            }, 5000)
+          }}
+          onRotationUpdate={(photoId, rotationVersion) => {
+            console.log('PhotoGridSimple: Rotation update received', { photoId, rotationVersion })
+            // Mark as recently rotated with timestamp
+            setRecentlyRotated(prev => {
+              const newMap = new Map(prev)
+              newMap.set(photoId, Date.now())
+              return newMap
+            })
+            // Update local thumbnail versions
+            setLocalThumbnailVersions(prev => {
+              const newVersions = new Map(prev)
+              newVersions.set(photoId, rotationVersion)
+              console.log('Updated thumbnail versions map:', newVersions)
+              return newVersions
+            })
+            // Update the photo object's rotation_version
+            const photoToUpdate = photos.find(p => p.id === photoId)
+            if (photoToUpdate) {
+              photoToUpdate.rotation_version = rotationVersion
+            }
+            // Also call parent callback if provided
+            if (onRotationUpdate) {
+              onRotationUpdate(photoId, rotationVersion)
+            }
+          }}
+          onBatchRotationUpdate={(updates) => {
+            console.log('PhotoGridSimple: Batch rotation updates received', updates)
+            // Mark all as recently rotated with timestamps
+            const timestamp = Date.now()
+            setRecentlyRotated(prev => {
+              const newMap = new Map(prev)
+              updates.forEach((_, photoId) => {
+                newMap.set(photoId, timestamp)
+              })
+              return newMap
+            })
+            
+            // Update all rotation versions at once
+            setLocalThumbnailVersions(prev => {
+              const newVersions = new Map(prev)
+              updates.forEach((version, photoId) => {
+                newVersions.set(photoId, version)
+                // Also update the photo object
+                const photo = photos.find(p => p.id === photoId)
+                if (photo) {
+                  photo.rotation_version = version
+                }
+              })
+              return newVersions
+            })
+          }}
         />
       )}
     </div>

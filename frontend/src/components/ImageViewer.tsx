@@ -6,9 +6,10 @@ interface ImageViewerProps {
   photos: Photo[]
   initialIndex: number
   onClose: () => void
+  onRotationUpdate?: (photoId: number, thumbnailVersion: number) => void
 }
 
-export default function ImageViewer({ photos, initialIndex, onClose }: ImageViewerProps) {
+export default function ImageViewer({ photos, initialIndex, onClose, onRotationUpdate }: ImageViewerProps) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex)
   const [zoom, setZoom] = useState(1)
   const [rotation, setRotation] = useState(0)
@@ -46,6 +47,43 @@ export default function ImageViewer({ photos, initialIndex, onClose }: ImageView
     }
   }, [currentIndex, preloadImage])
   
+  const saveRotation = async (photoId: number, newRotation: number) => {
+    // Normalize rotation to 0, 90, 180, or 270
+    let normalizedRotation = ((newRotation % 360) + 360) % 360
+    // Round to nearest 90 degrees to handle any floating point issues
+    normalizedRotation = Math.round(normalizedRotation / 90) * 90
+    // 360 should become 0
+    if (normalizedRotation === 360) normalizedRotation = 0
+    
+    console.log('Saving rotation:', { photoId, newRotation, normalizedRotation })
+    
+    try {
+      const response = await fetch(`${API_URL}/api/v1/photos/${photoId}/rotation`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ rotation: normalizedRotation })
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        // Save rotation state locally
+        setSavedRotations(prev => ({ ...prev, [currentIndex]: normalizedRotation }))
+        // Clear preloaded image to force reload with new rotation
+        delete preloadedImages.current[currentIndex]
+        setImageLoaded(prev => ({ ...prev, [currentIndex]: false }))
+        // Notify parent component about rotation update with thumbnail version
+        console.log('Rotation saved, notifying parent:', { photoId, version: data.thumbnail_version })
+        if (onRotationUpdate && data.thumbnail_version) {
+          onRotationUpdate(photoId, data.thumbnail_version)
+        }
+      }
+    } catch (error) {
+      console.error('Failed to save rotation:', error)
+    }
+  }
+  
   // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -72,17 +110,25 @@ export default function ImageViewer({ photos, initialIndex, onClose }: ImageView
           handleZoomOut()
           break
         case 'r':
-          handleRotateRight()
+          setRotation(prev => {
+            const newRotation = prev + 90
+            saveRotation(currentPhoto.id, newRotation)
+            return newRotation
+          })
           break
         case 'R':
-          handleRotateLeft()
+          setRotation(prev => {
+            const newRotation = prev - 90
+            saveRotation(currentPhoto.id, newRotation)
+            return newRotation
+          })
           break
       }
     }
     
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentIndex, showInfo])
+  }, [currentIndex, showInfo, currentPhoto, onClose])
   
   const navigateNext = () => {
     if (currentIndex < photos.length - 1) {
@@ -103,31 +149,6 @@ export default function ImageViewer({ photos, initialIndex, onClose }: ImageView
     // Load saved rotation for this photo if it exists
     const savedRotation = savedRotations[currentIndex] || 0
     setRotation(savedRotation)
-  }
-  
-  const saveRotation = async (photoId: number, newRotation: number) => {
-    // Normalize rotation to 0, 90, 180, or 270
-    const normalizedRotation = ((newRotation % 360) + 360) % 360
-    
-    try {
-      const response = await fetch(`${API_URL}/api/v1/photos/${photoId}/rotation`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ rotation: normalizedRotation })
-      })
-      
-      if (response.ok) {
-        // Save rotation state locally
-        setSavedRotations(prev => ({ ...prev, [currentIndex]: normalizedRotation }))
-        // Clear preloaded image to force reload with new rotation
-        delete preloadedImages.current[currentIndex]
-        setImageLoaded(prev => ({ ...prev, [currentIndex]: false }))
-      }
-    } catch (error) {
-      console.error('Failed to save rotation:', error)
-    }
   }
   
   const handleZoomIn = () => {

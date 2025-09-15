@@ -11,6 +11,7 @@ export default function Home() {
   const [importStatus, setImportStatus] = useState<string | null>(null)
   const [hasActiveJobs, setHasActiveJobs] = useState(false)
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc')
+  const [thumbnailVersions, setThumbnailVersions] = useState<Map<number, number>>(new Map())
 
   // Check for active jobs
   const { data: jobsData } = useQuery({
@@ -77,6 +78,15 @@ export default function Home() {
   }
 
   const allPhotos = data?.pages.flatMap(page => page.data) || []
+
+  const handleRotationUpdate = (photoId: number, thumbnailVersion: number) => {
+    // Update the thumbnail version for this photo
+    setThumbnailVersions(prev => {
+      const newVersions = new Map(prev)
+      newVersions.set(photoId, thumbnailVersion)
+      return newVersions
+    })
+  }
 
   return (
     <>
@@ -147,6 +157,8 @@ export default function Home() {
             onLoadMore={fetchNextPage}
             hasMore={hasNextPage || false}
             isLoading={isFetchingNextPage}
+            thumbnailVersions={thumbnailVersions}
+            onRotationUpdate={handleRotationUpdate}
           />
         )}
       </main>

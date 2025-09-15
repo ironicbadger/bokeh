@@ -3,7 +3,7 @@
 ## 📅 Recent Work Completed (2025-01-15)
 
 ### Session Summary
-Successfully implemented a full-screen image viewer with rotation persistence and significant performance optimizations.
+Successfully implemented a full-screen image viewer with rotation persistence, real-time thumbnail updates, and significant performance optimizations.
 
 ### Key Accomplishments
 1. **Full-Screen Image Viewer** (`frontend/src/components/ImageViewer.tsx`)
@@ -19,7 +19,14 @@ Successfully implemented a full-screen image viewer with rotation persistence an
    - Automatic thumbnail regeneration with rotation applied
    - Combined EXIF + user rotation handling
 
-3. **Performance Fixes**
+3. **Real-Time Thumbnail Updates** ✅ **FIXED**
+   - Thumbnails now update immediately when rotating in viewer
+   - Implemented Map-based timestamp tracking for cache-busting
+   - Temporary `&_t=timestamp` parameter for recently rotated images
+   - 5-second cache bypass window after rotation
+   - Version-based long-term caching with `?v=version`
+
+4. **Performance Fixes**
    - Grid: 800px prefetch, 100 photos/page, 5-min cache
    - Thumbnails: Reduced workers to 4, added delays for UI priority
    - Fixed duplicate API requests issue
@@ -30,10 +37,10 @@ Successfully implemented a full-screen image viewer with rotation persistence an
 - ✅ Image viewer fully functional with all controls
 - ✅ Rotation saves and persists correctly
 - ✅ Thumbnails regenerate with proper orientation
+- ✅ **Thumbnail sync fixed** - Real-time updates without refresh
 - ✅ Performance optimized for large libraries (tested with 11,000+ photos)
 
 ### Known Issues
-- **Thumbnail Rotation Sync**: When rotating an image in the viewer, the thumbnail in the grid doesn't update immediately. Requires page refresh to see rotated thumbnails. Need to implement real-time sync between viewer rotation and grid thumbnails.
 - **TIF/TIFF Files**: Don't load in the full-screen image viewer (lightbox). Thumbnails work but full-size viewing fails. Need to add TIF support to the `/thumbnails/{id}/full` endpoint.
 - **RAW/HEIF Files**: RAW files (CR2, NEF, ARW) and HEIF/HEIC files don't display in viewer. Need server-side conversion.
 - Thumbnail regeneration takes time but doesn't block UI
@@ -42,38 +49,39 @@ Successfully implemented a full-screen image viewer with rotation persistence an
 - **No Coral TPU**: Decided against using Coral TPU for ML orientation - EXIF handles most cases, complexity not worth it
 - **Thumbnail Strategy**: Overwrite thumbnails in-place rather than delete-then-recreate to avoid broken images
 - **Concurrency**: Reduced workers to 4 rather than implement complex job queuing - simpler and effective
+- **Cache-Busting Strategy**: Use Map for timestamp tracking instead of Set for consistent cache-busting URLs
 
 ---
 
 ## 🎯 Next Session Tasks (Priority Order)
 
-### 1. Fix Thumbnail Rotation Sync
-- Implement real-time thumbnail updates in grid when image is rotated in viewer
-- Consider optimistic UI updates or cache invalidation strategy
-- Test with WebSocket/SSE for real-time updates
-
-### 2. Fix TIF/TIFF Support in Image Viewer
+### 1. Fix TIF/TIFF Support in Image Viewer
 - Add support for TIF files in the full-screen viewer
 - Modify `/thumbnails/{id}/full` endpoint to handle TIF conversion
 - Consider server-side conversion to JPEG for browser compatibility
+
+### 2. Add RAW/HEIF File Support
+- Add support for RAW files (CR2, NEF, ARW)
+- Add support for HEIF/HEIC files
+- Server-side conversion to JPEG for browser display
 
 ### 3. Batch Operations
 - Add multi-select mode to grid
 - Implement bulk operations (rotate, delete, favorite)
 - Keyboard shortcuts for selection
 
-### 2. Search & Filtering
+### 4. Search & Filtering
 - Add search bar component
 - Implement filename search
 - Add date range filtering
 - Quick filter buttons
 
-### 3. Album/Folder Organization  
+### 5. Album/Folder Organization  
 - Create album management UI
 - Add photo-to-album assignment
 - Implement folder tree navigation
 
-### 4. Settings Page
+### 6. Settings Page
 - Scan directory configuration
 - Performance tuning options
 - User preferences
@@ -156,9 +164,9 @@ Remember: All test files go in `tests/js/` - this keeps the project root clean a
 
 ## 🔧 Technical Context
 
-### Key Files Modified Today
+### Key Files Modified
 - `frontend/src/components/ImageViewer.tsx` - Full image viewer component
-- `frontend/src/components/PhotoGridSimple.tsx` - Masonry grid with lazy loading
+- `frontend/src/components/PhotoGridSimple.tsx` - Masonry grid with lazy loading and cache-busting
 - `backend/api/photos.py` - Added rotation endpoint
 - `backend/tasks/thumbnails.py` - Parallel thumbnail processing
 - `backend/models/photo.py` - Added user_rotation field
@@ -202,6 +210,8 @@ PROGRESS_UPDATE_INTERVAL=5
 - Test rotation: `node tests/js/test-rotation.js`
 - Test image viewer: `node tests/js/test-image-viewer.js`
 - Test orientation: `node tests/js/test-orientation-status.js`
+- Test thumbnail updates: `node tests/js/test-img7667-rotation.js`
+- Test visual rotation: `node tests/js/test-rotation-visual-check.js`
 
 ### Keyboard Shortcuts (Image Viewer)
 - **Arrow Left/Right**: Navigate photos
@@ -217,3 +227,79 @@ PROGRESS_UPDATE_INTERVAL=5
 2. **Thumbnail blocking UI**: Add delays and reduce worker count
 3. **PostgreSQL JSON errors**: Use subquery instead of DISTINCT on JSON columns
 4. **React init errors**: Define state variables before using in dependencies
+5. **Thumbnail cache not updating**: Use Map<id, timestamp> for consistent cache-busting URLs
+
+## 📚 Technical Deep Dive: Thumbnail Rotation Sync
+
+### The Problem
+When rotating an image in the lightbox viewer, the thumbnail in the grid view wasn't updating without a page refresh. Browser caching prevented the updated thumbnail from loading even though the server had regenerated it.
+
+### The Solution
+Implemented a dual-layer cache-busting strategy:
+
+1. **Version-based caching** (`?v=version`):
+   - Long-term cache management
+   - Increments with each rotation
+   - Persists across sessions
+
+2. **Timestamp-based cache bypass** (`&_t=timestamp`):
+   - Temporary parameter for recently rotated images
+   - Stored in a Map<photoId, timestamp> for consistency
+   - Cleared 5 seconds after viewer closes
+   - Ensures immediate updates without breaking cache efficiency
+
+### Implementation Details
+
+```typescript
+// PhotoGridSimple.tsx - Key changes
+
+// Changed from Set to Map to store consistent timestamps
+const [recentlyRotated, setRecentlyRotated] = useState<Map<number, number>>(new Map())
+
+// Store timestamp when rotation occurs
+const handleRotationUpdate = (photoId: number, rotationVersion: number) => {
+  setRecentlyRotated(prev => {
+    const newMap = new Map(prev)
+    newMap.set(photoId, Date.now())  // Store timestamp once
+    return newMap
+  })
+  setLocalThumbnailVersions(prev => new Map(prev).set(photoId, rotationVersion))
+}
+
+// Use stored timestamp for consistent URLs
+const getThumbnailUrl = (photo: Photo) => {
+  const baseUrl = `http://localhost:8000/api/v1/thumbnails/${photo.id}/400`
+  const version = localThumbnailVersions.get(photo.id) || photo.rotation_version || 0
+  const rotationTimestamp = recentlyRotated.get(photo.id)  // Get stored timestamp
+  
+  if (rotationTimestamp && version) {
+    return `${baseUrl}?v=${version}&_t=${rotationTimestamp}`  // Consistent URL
+  }
+  return version ? `${baseUrl}?v=${version}` : baseUrl
+}
+
+// Clear timestamps after delay
+const handleViewerClose = () => {
+  setTimeout(() => {
+    setRecentlyRotated(new Map())  // Clear all timestamps
+  }, 5000)
+}
+```
+
+### Why This Works
+
+1. **Consistent URLs during render cycles**: By storing timestamps in a Map, the same timestamp is used across all renders until explicitly cleared.
+
+2. **Browser cache bypass**: The `_t` parameter forces the browser to fetch the new image, bypassing any cached version.
+
+3. **Temporary bypass window**: The 5-second delay allows the thumbnail to fully regenerate server-side before removing the bypass.
+
+4. **Performance maintained**: After the bypass window, normal version-based caching resumes, maintaining performance for non-rotated images.
+
+### Testing Verification
+
+Created comprehensive tests that confirm:
+- URL changes from `?v=3` to `?v=4&_t=timestamp` after rotation
+- Visual confirmation via screenshots (180° rotation visible)
+- Persistence after refresh (version retained, timestamp removed)
+- No unnecessary re-fetches during normal browsing

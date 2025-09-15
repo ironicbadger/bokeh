@@ -30,6 +30,8 @@ class Photo(Base):
     original_orientation = Column(Integer, nullable=True)  # EXIF orientation (1-8)
     rotation_applied = Column(Integer, default=0)  # Degrees rotated from EXIF (0, 90, 180, 270)
     user_rotation = Column(Integer, default=0)  # User manual rotation (0, 90, 180, 270)
+    rotation_version = Column(Integer, default=0)  # Version for cache busting
+    final_rotation = Column(Integer, default=0)  # Combined EXIF + user rotation (0, 90, 180, 270)
     orientation_corrected = Column(Boolean, default=False)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

@@ -54,8 +54,9 @@ class ThumbnailService:
                     thumbnail = img.copy()
                     thumbnail.thumbnail(dimensions, Image.Resampling.LANCZOS)
                     
-                    # Save as JPEG (WebP support can be added later)
-                    filename = f"{photo_id}_{size_name}.jpg"
+                    # Save with versioned filename for cache busting
+                    rotation_version = photo.rotation_version or 0
+                    filename = f"{photo_id}_{size_name}_v{rotation_version}.jpg"
                     filepath = os.path.join(self.thumbnails_path, filename)
                     thumbnail.save(filepath, 'JPEG', quality=85, optimize=True)
                     

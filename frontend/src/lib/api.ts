@@ -14,6 +14,8 @@ export interface Photo {
   camera_model?: string
   rating?: number
   is_favorite: boolean
+  rotation_version?: number
+  final_rotation?: number
   thumbnails?: {
     '150'?: string
     '400'?: string

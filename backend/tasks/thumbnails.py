@@ -77,8 +77,15 @@ class ThumbnailWorker:
                     # Use high-quality resampling
                     thumbnail.thumbnail(dimensions, Image.Resampling.LANCZOS)
                     
-                    # Save thumbnail with higher quality
-                    filename = f"{photo_id}_{size_name}.jpg"
+                    # Get rotation version from database
+                    from models import get_db, Photo
+                    db = next(get_db())
+                    photo = db.query(Photo).filter(Photo.id == photo_id).first()
+                    rotation_version = photo.rotation_version if photo else 0
+                    db.close()
+                    
+                    # Save thumbnail with versioned naming
+                    filename = f"{photo_id}_{size_name}_v{rotation_version}.jpg"
                     filepath = os.path.join(self.thumbnails_path, filename)
                     # Increase quality to 95 for better appearance
                     thumbnail.save(filepath, 'JPEG', quality=95, optimize=True, progressive=True)
@@ -214,6 +221,9 @@ def process_thumbnail_batch(self: Task, photo_ids: List[int], job_id: int = None
                         if job.payload is None:
                             job.payload = {}
                         job.payload['workers'] = MAX_THUMBNAIL_WORKERS
+                        job.payload['processed'] = processed
+                        job.payload['failed'] = failed
+                        job.payload['photo_count'] = len(photos)
                         db.commit()
                     
                 except Exception as e:
@@ -274,7 +284,7 @@ def generate_photo_thumbnails(photo_id: int):
     """Generate thumbnails for a single photo"""
     return process_thumbnail_batch([photo_id])
 
-@celery_app.task(name='tasks.regenerate_photo_thumbnails')
+@celery_app.task(name='tasks.regenerate_photo_thumbnails', priority=5)  # Higher priority for single photo
 def regenerate_photo_thumbnails(photo_id: int):
     """Regenerate thumbnails for a single photo with rotation applied"""
     from services.thumbnail_service import ThumbnailService
