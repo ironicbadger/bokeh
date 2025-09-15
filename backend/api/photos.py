@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Body
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from models import get_db, Photo
@@ -84,6 +84,137 @@ async def list_photos(
         }
     }
 
+@router.patch("/{photo_id}/favorite")
+async def toggle_favorite(photo_id: int, db: Session = Depends(get_db)):
+    """Toggle favorite status for a photo"""
+    photo = db.query(Photo).filter(Photo.id == photo_id).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    
+    photo.is_favorite = not photo.is_favorite
+    db.commit()
+    
+    return {
+        "message": "Favorite toggled",
+        "photo_id": photo_id,
+        "is_favorite": photo.is_favorite
+    }
+
+@router.get("/years")
+async def get_photo_years(db: Session = Depends(get_db)):
+    """Get list of years with photo counts and preview photos"""
+    from sqlalchemy import extract, func, desc as sql_desc, and_
+    from models import Thumbnail
+    
+    # Get photos with thumbnails
+    subquery = db.query(Thumbnail.photo_id).filter(
+        Thumbnail.size == "400"
+    ).subquery()
+    
+    # Query for years
+    results = db.query(
+        extract('year', func.coalesce(Photo.date_taken, Photo.created_at)).label('year'),
+        func.count(Photo.id).label('count')
+    ).filter(
+        Photo.is_deleted == False,
+        Photo.id.in_(subquery)
+    ).group_by(
+        extract('year', func.coalesce(Photo.date_taken, Photo.created_at))
+    ).order_by(
+        sql_desc('year')
+    ).all()
+    
+    years_data = []
+    for r in results:
+        year = int(r.year)
+        
+        # Get a favorite photo for this year, or the first photo if no favorites
+        preview_photo = db.query(Photo).filter(
+            Photo.is_deleted == False,
+            Photo.id.in_(subquery),
+            extract('year', func.coalesce(Photo.date_taken, Photo.created_at)) == year,
+            Photo.is_favorite == True
+        ).first()
+        
+        if not preview_photo:
+            # If no favorite, get the first photo of the year
+            preview_photo = db.query(Photo).filter(
+                Photo.is_deleted == False,
+                Photo.id.in_(subquery),
+                extract('year', func.coalesce(Photo.date_taken, Photo.created_at)) == year
+            ).order_by(func.coalesce(Photo.date_taken, Photo.created_at).desc()).first()
+        
+        years_data.append({
+            "year": year,
+            "count": r.count,
+            "preview_photo": preview_photo
+        })
+    
+    return {"years": years_data}
+
+@router.get("/year/{year}")
+async def get_photos_by_year(
+    year: int,
+    db: Session = Depends(get_db)
+):
+    """Get all photos for a specific year"""
+    from sqlalchemy import extract, func
+    from models import Thumbnail
+    from datetime import datetime
+    
+    # Get photos with thumbnails for the year
+    subquery = db.query(Thumbnail.photo_id).filter(
+        Thumbnail.size == "400"
+    ).subquery()
+    
+    photos = db.query(Photo).filter(
+        Photo.is_deleted == False,
+        Photo.id.in_(subquery),
+        extract('year', func.coalesce(Photo.date_taken, Photo.created_at)) == year
+    ).order_by(
+        func.coalesce(Photo.date_taken, Photo.created_at)
+    ).all()
+    
+    return {
+        "year": year,
+        "total": len(photos),
+        "photos": photos
+    }
+
+@router.get("/year/{year}/month/{month}")
+async def get_photos_by_month(
+    year: int,
+    month: int,
+    db: Session = Depends(get_db)
+):
+    """Get photos for a specific year and month"""
+    from sqlalchemy import extract, func
+    from models import Thumbnail
+    
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="Month must be between 1 and 12")
+    
+    # Get photos with thumbnails for the year/month
+    subquery = db.query(Thumbnail.photo_id).filter(
+        Thumbnail.size == "400"
+    ).subquery()
+    
+    photos = db.query(Photo).filter(
+        Photo.is_deleted == False,
+        Photo.id.in_(subquery),
+        extract('year', func.coalesce(Photo.date_taken, Photo.created_at)) == year,
+        extract('month', func.coalesce(Photo.date_taken, Photo.created_at)) == month
+    ).order_by(
+        func.coalesce(Photo.date_taken, Photo.created_at)
+    ).all()
+    
+    return {
+        "year": year,
+        "month": month,
+        "total": len(photos),
+        "photos": photos
+    }
+
 @router.get("/{photo_id}", response_model=PhotoResponse)
 async def get_photo(photo_id: int, db: Session = Depends(get_db)):
     photo = db.query(Photo).filter(Photo.id == photo_id).first()
@@ -94,9 +225,10 @@ async def get_photo(photo_id: int, db: Session = Depends(get_db)):
 @router.post("/import")
 async def import_photos(
     background_tasks: BackgroundTasks,
-    scan_type: str = "incremental",
+    request: dict = Body({"scan_type": "incremental"}),
     db: Session = Depends(get_db)
 ):
+    scan_type = request.get("scan_type", "incremental")
     scanner = DirectoryScanner(db)
     job_id = scanner.create_scan_job(scan_type)
     background_tasks.add_task(scanner.scan_directory, job_id, scan_type)

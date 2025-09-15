@@ -1,17 +1,52 @@
 import { useState, useEffect } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { useRouter } from 'next/router'
 import Head from 'next/head'
 import PhotoGridSimple from '@/components/PhotoGridSimple'
+import YearView from '@/components/YearView'
+import FilesView from '@/components/FilesView'
+import ViewModeSelector, { ViewMode } from '@/components/ViewModeSelector'
 import StatusBar from '@/components/StatusBar'
 import { fetchPhotos } from '@/lib/api'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export default function Home() {
+  const router = useRouter()
   const [importStatus, setImportStatus] = useState<string | null>(null)
   const [hasActiveJobs, setHasActiveJobs] = useState(false)
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc')
   const [thumbnailVersions, setThumbnailVersions] = useState<Map<number, number>>(new Map())
+  
+  // Get view mode from URL or default to 'grid'
+  const viewMode = (router.query.view as ViewMode) || 'grid'
+  
+  const setViewMode = (mode: ViewMode) => {
+    router.push({ query: { ...router.query, view: mode } }, undefined, { shallow: true })
+  }
+  
+  // Keyboard shortcuts for view switching
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      // Don't trigger if user is typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      
+      switch(e.key.toLowerCase()) {
+        case 'g':
+          setViewMode('grid')
+          break
+        case 'y':
+          setViewMode('year')
+          break
+        case 'f':
+          setViewMode('files')
+          break
+      }
+    }
+    
+    window.addEventListener('keydown', handleKeyPress)
+    return () => window.removeEventListener('keydown', handleKeyPress)
+  }, [])
 
   // Check for active jobs
   const { data: jobsData } = useQuery({
@@ -94,24 +129,32 @@ export default function Home() {
         <title>Bokeh.</title>
         <meta name="description" content="Photo management application" />
       </Head>
-      <div className="min-h-screen bg-gray-100">
-      <header className="bg-white shadow-sm border-b fixed top-0 left-0 right-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="min-h-screen bg-gray-900">
+      <header className="bg-gray-800 shadow-lg border-b border-gray-700 fixed top-0 left-0 right-0 z-50">
+        <div className="w-full px-4">
           <div className="flex justify-between items-center h-16">
-            <h1 className="text-2xl font-semibold text-gray-900">
+            <h1 className="text-2xl font-semibold text-white">
               Bokeh.
             </h1>
+            
+            {/* View Mode Selector */}
+            <ViewModeSelector 
+              currentMode={viewMode}
+              onModeChange={setViewMode}
+            />
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 mt-16 mb-20">
-        {/* Sort Controls */}
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-4">
-            <span className="text-sm font-medium text-gray-700">Sort by Date:</span>
-            <div className="flex gap-2">
-              <button
+      {/* Conditional rendering based on view mode */}
+      {viewMode === 'grid' ? (
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 mt-16 mb-12">
+          {/* Sort Controls */}
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-4">
+              <span className="text-sm font-medium text-gray-700">Sort by Date:</span>
+              <div className="flex gap-2">
+                <button
                 onClick={() => setSortOrder('desc')}
                 className={`px-3 py-1 text-sm rounded-md transition-colors ${
                   sortOrder === 'desc'
@@ -161,7 +204,22 @@ export default function Home() {
             onRotationUpdate={handleRotationUpdate}
           />
         )}
-      </main>
+        </main>
+      ) : viewMode === 'year' ? (
+        <div className="mt-16">
+          <YearView onPhotoClick={(photo, photos, index) => {
+            // Could open viewer here if needed
+            console.log('Photo clicked:', photo)
+          }} />
+        </div>
+      ) : viewMode === 'files' ? (
+        <div className="mt-16">
+          <FilesView onPhotoClick={(photo, photos, index) => {
+            // Could open viewer here if needed
+            console.log('Photo clicked:', photo)
+          }} />
+        </div>
+      ) : null}
 
       <StatusBar photoCount={allPhotos.length} />
     </div>
