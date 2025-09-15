@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { X, Info, ZoomIn, ZoomOut, RotateCw, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react'
+import { X, Info, ZoomIn, ZoomOut, RotateCw, RotateCcw, ChevronLeft, ChevronRight, Heart } from 'lucide-react'
 import { Photo } from '@/lib/api'
 
 interface ImageViewerProps {
@@ -16,11 +16,36 @@ export default function ImageViewer({ photos, initialIndex, onClose, onRotationU
   const [showInfo, setShowInfo] = useState(false)
   const [imageLoaded, setImageLoaded] = useState<{ [key: number]: boolean }>({})
   const [savedRotations, setSavedRotations] = useState<{ [key: number]: number }>({})
+  const [favoriteStatus, setFavoriteStatus] = useState<{ [key: number]: boolean }>({})
   const containerRef = useRef<HTMLDivElement>(null)
   const preloadedImages = useRef<{ [key: number]: HTMLImageElement }>({})
   
   const currentPhoto = photos[currentIndex]
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+  
+  // Initialize favorite status for current photo
+  useEffect(() => {
+    if (currentPhoto && favoriteStatus[currentPhoto.id] === undefined) {
+      setFavoriteStatus(prev => ({ ...prev, [currentPhoto.id]: currentPhoto.is_favorite || false }))
+    }
+  }, [currentPhoto])
+  
+  const toggleFavorite = async () => {
+    if (!currentPhoto) return
+    
+    try {
+      const response = await fetch(`${API_URL}/api/v1/photos/${currentPhoto.id}/favorite`, {
+        method: 'PATCH',
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        setFavoriteStatus(prev => ({ ...prev, [currentPhoto.id]: data.is_favorite }))
+      }
+    } catch (error) {
+      console.error('Error toggling favorite:', error)
+    }
+  }
   
   // Preload images for smooth navigation
   const preloadImage = useCallback((index: number) => {
@@ -216,6 +241,17 @@ export default function ImageViewer({ photos, initialIndex, onClose, onRotationU
           </div>
           
           <div className="flex items-center gap-2">
+            <button
+              onClick={toggleFavorite}
+              className={`p-2 rounded-full transition-colors ${
+                favoriteStatus[currentPhoto?.id] ? 'bg-red-500/80 hover:bg-red-500' : 'bg-white/20 hover:bg-white/30'
+              }`}
+              title="Toggle Favorite (F)"
+            >
+              <Heart className={`w-5 h-5 ${
+                favoriteStatus[currentPhoto?.id] ? 'text-white fill-white' : 'text-white'
+              }`} />
+            </button>
             <button
               onClick={() => setShowInfo(!showInfo)}
               className={`p-2 rounded-full transition-colors ${

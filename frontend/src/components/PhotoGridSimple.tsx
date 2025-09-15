@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import { Photo } from '@/lib/api'
 import { Loader2 } from 'lucide-react'
 import ImageViewer from './ImageViewerNew'
+import ZoomControl from './ZoomControl'
 
 interface PhotoGridProps {
   photos: Photo[]
@@ -20,6 +21,7 @@ export default function PhotoGridSimple({ photos, onLoadMore, hasMore, isLoading
   const [viewerIndex, setViewerIndex] = useState(0)
   const [localThumbnailVersions, setLocalThumbnailVersions] = useState<Map<number, number>>(thumbnailVersions || new Map())
   const [recentlyRotated, setRecentlyRotated] = useState<Map<number, number>>(new Map()) // Map of photoId to timestamp
+  const [zoomLevel, setZoomLevel] = useState(5) // Default zoom level
   
   // Update local versions when prop changes
   useEffect(() => {
@@ -141,17 +143,47 @@ export default function PhotoGridSimple({ photos, onLoadMore, hasMore, isLoading
     }
   }, [photos, columns])
   
+  // Calculate columns based on zoom level
+  const getGridColumns = () => {
+    switch(zoomLevel) {
+      case 1: return 2
+      case 2: return 3
+      case 3: return 4
+      case 4: return 5
+      case 5: return 6
+      case 6: return 7
+      case 7: return 8
+      case 8: return 9
+      case 9: return 10
+      case 10: return 12
+      default: return 6
+    }
+  }
+  
+  const dynamicColumns = getGridColumns()
+  
   // Group photos into columns for masonry effect
-  const photoColumns: Photo[][] = Array.from({ length: columns }, () => [])
+  const photoColumns: Photo[][] = Array.from({ length: dynamicColumns }, () => [])
   
   photos.forEach((photo, index) => {
-    photoColumns[index % columns].push(photo)
+    photoColumns[index % dynamicColumns].push(photo)
   })
 
   return (
-    <div>
-      {/* Masonry grid with minimal gaps */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-0.5">
+    <div className="pb-12">
+      {/* Zoom Control - Subtle bottom-right */}
+      <ZoomControl 
+        value={zoomLevel} 
+        onChange={setZoomLevel}
+        min={2}
+        max={10}
+      />
+      
+      {/* Masonry grid with dynamic columns */}
+      <div 
+        className="grid gap-0.5"
+        style={{ gridTemplateColumns: `repeat(${dynamicColumns}, minmax(0, 1fr))` }}
+      >
         {photoColumns.map((column, colIndex) => (
           <div key={colIndex} className="flex flex-col gap-0.5">
             {column.map((photo) => {

@@ -37,9 +37,9 @@ export default function StatusBar({ photoCount }: StatusBarProps) {
   }
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-12 text-sm text-gray-600">
+    <div className="fixed bottom-0 left-0 right-0 bg-gray-800/95 backdrop-blur-sm border-t border-gray-700 z-50">
+      <div className="w-full px-4">
+        <div className="flex justify-between items-center h-8 text-xs text-gray-400">
           <div className="flex gap-6">
             <span>Photos: {photoCount}</span>
             {stats && (
@@ -55,8 +55,8 @@ export default function StatusBar({ photoCount }: StatusBarProps) {
               onClick={handleJobsClick}
               className={`flex items-center gap-1 transition-colors ${
                 stats?.active_jobs > 0 
-                  ? 'text-blue-600 animate-pulse hover:text-blue-700' 
-                  : 'text-gray-500 hover:text-gray-700'
+                  ? 'text-blue-400 animate-pulse hover:text-blue-300' 
+                  : 'text-gray-400 hover:text-gray-300'
               }`}
             >
               <span>⚡</span>
