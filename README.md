@@ -1,5 +1,7 @@
 # Photo Management Application
 
+> WARNING: THIS APP IS FAAAAAAAAR FROM FINISHED. DO NOT USE. IT WAS YEETED INTO EXISTENCE BY VIBES.
+
 A containerized photo management application with support for RAW and HEIF formats, built with Next.js and FastAPI.
 
 ## Quick Start
