@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { useInfiniteQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import Image from 'next/image'
-import { useRouter } from 'next/router'
 import ZoomControl from './ZoomControl'
+import YearDetailView from './YearDetailView'
 
 interface Photo {
   id: number
@@ -36,24 +36,28 @@ const MONTH_NAMES = [
 ]
 
 const YearView: React.FC<YearViewProps> = ({ onPhotoClick }) => {
-  const router = useRouter()
   const [zoomLevel, setZoomLevel] = useState(4)
+  const [selectedYear, setSelectedYear] = useState<number | null>(null)
   
   // Fetch years overview with preview photos
-  const { data: yearsData, isLoading } = useInfiniteQuery({
+  const { data: yearsData, isLoading } = useQuery({
     queryKey: ['photos', 'years'],
     queryFn: async () => {
       const response = await fetch('http://localhost:8000/api/v1/photos/years')
       if (!response.ok) throw new Error('Failed to fetch years')
-      return response.json()
+      const data = await response.json()
+      return data
     },
-    getNextPageParam: () => undefined,
     refetchInterval: false,
   })
   
   const handleYearClick = (year: number) => {
-    // Navigate to the year detail view
-    router.push(`/year/${year}`)
+    // Show year detail view
+    setSelectedYear(year)
+  }
+  
+  const handleBackToYears = () => {
+    setSelectedYear(null)
   }
   
   const getThumbnailUrl = (photo: Photo) => {
@@ -62,7 +66,8 @@ const YearView: React.FC<YearViewProps> = ({ onPhotoClick }) => {
     return version ? `${baseUrl}?v=${version}` : baseUrl
   }
   
-  const years: YearData[] = yearsData?.pages?.[0]?.years || []
+  // Extract years from the data
+  const years: YearData[] = yearsData?.years || []
   
   // Calculate grid columns based on zoom level
   const getGridCols = () => {
@@ -77,6 +82,17 @@ const YearView: React.FC<YearViewProps> = ({ onPhotoClick }) => {
       case 8: return 'grid-cols-8'
       default: return 'grid-cols-4'
     }
+  }
+  
+  // Show year detail view if a year is selected
+  if (selectedYear) {
+    return (
+      <YearDetailView 
+        year={selectedYear} 
+        onPhotoClick={onPhotoClick}
+        onBack={handleBackToYears}
+      />
+    )
   }
   
   return (
@@ -99,6 +115,7 @@ const YearView: React.FC<YearViewProps> = ({ onPhotoClick }) => {
           {years.map((yearData: YearData) => (
             <div
               key={yearData.year}
+              data-testid="year-card"
               className="relative group cursor-pointer transform transition-all hover:scale-105"
               onClick={() => handleYearClick(yearData.year)}
             >
@@ -121,14 +138,14 @@ const YearView: React.FC<YearViewProps> = ({ onPhotoClick }) => {
                 
                 {/* Year text */}
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <h2 className="text-4xl font-bold text-white drop-shadow-lg">
+                  <h2 className="text-3xl font-bold text-white drop-shadow-lg">
                     {yearData.year}
                   </h2>
                 </div>
                 
                 {/* Photo count badge */}
                 <div className="absolute bottom-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-1 rounded">
-                  <span className="text-xs text-white">
+                  <span className="text-sm text-white">
                     {yearData.count} photos
                   </span>
                 </div>

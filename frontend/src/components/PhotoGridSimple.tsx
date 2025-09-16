@@ -17,11 +17,14 @@ interface PhotoGridProps {
 export default function PhotoGridSimple({ photos, onLoadMore, hasMore, isLoading, thumbnailVersions, onPhotoClick, onRotationUpdate }: PhotoGridProps) {
   const observerTarget = useRef<HTMLDivElement>(null)
   const [loadingImages, setLoadingImages] = useState<Set<number>>(new Set())
+  const [loadedImages, setLoadedImages] = useState<Set<number>>(new Set())
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerIndex, setViewerIndex] = useState(0)
   const [localThumbnailVersions, setLocalThumbnailVersions] = useState<Map<number, number>>(thumbnailVersions || new Map())
   const [recentlyRotated, setRecentlyRotated] = useState<Map<number, number>>(new Map()) // Map of photoId to timestamp
   const [zoomLevel, setZoomLevel] = useState(5) // Default zoom level
+  const [visiblePhotos, setVisiblePhotos] = useState<Set<number>>(new Set())
+  const animationDebounceRef = useRef<NodeJS.Timeout>()
   
   // Update local versions when prop changes
   useEffect(() => {
@@ -33,7 +36,13 @@ export default function PhotoGridSimple({ photos, onLoadMore, hasMore, isLoading
   const handleObserver = useCallback((entries: IntersectionObserverEntry[]) => {
     const [target] = entries
     if (target.isIntersecting && hasMore && !isLoading) {
-      onLoadMore()
+      // Debounce to prevent rapid fire during fast scrolling
+      if (animationDebounceRef.current) {
+        clearTimeout(animationDebounceRef.current)
+      }
+      animationDebounceRef.current = setTimeout(() => {
+        onLoadMore()
+      }, 100)
     }
   }, [hasMore, isLoading, onLoadMore])
 
@@ -56,11 +65,17 @@ export default function PhotoGridSimple({ photos, onLoadMore, hasMore, isLoading
     const version = localThumbnailVersions.get(photo.id) || photo.rotation_version || 0
     // Add timestamp for photos that were just rotated to force refresh
     const rotationTimestamp = recentlyRotated.get(photo.id)
-    if (rotationTimestamp && version) {
-      // Use the stored timestamp for consistent URL until cleared
-      return `${baseUrl}?v=${version}&_t=${rotationTimestamp}`
-    }
-    return version ? `${baseUrl}?v=${version}` : baseUrl
+    
+    // Check for global cache bust from session storage
+    const cacheBust = sessionStorage.getItem('cacheBust')
+    
+    const params = new URLSearchParams()
+    if (version) params.append('v', version.toString())
+    if (rotationTimestamp) params.append('_t', rotationTimestamp.toString())
+    if (cacheBust) params.append('cb', cacheBust)
+    
+    const queryString = params.toString()
+    return queryString ? `${baseUrl}?${queryString}` : baseUrl
   }
   
   const handlePhotoClick = (photoIndex: number) => {
@@ -188,28 +203,53 @@ export default function PhotoGridSimple({ photos, onLoadMore, hasMore, isLoading
           <div key={colIndex} className="flex flex-col gap-0.5">
             {column.map((photo) => {
               const photoIndex = photos.findIndex(p => p.id === photo.id)
+              const isLoaded = loadedImages.has(photo.id)
+              const isLoading = loadingImages.has(photo.id)
+              
               return (
                 <div
                 key={photo.id}
-                className="relative overflow-hidden bg-gray-100 hover:opacity-90 transition-opacity cursor-pointer group"
+                className={`photo-item relative overflow-hidden bg-gray-100 hover:opacity-90 transition-opacity cursor-pointer group ${
+                  isLoaded ? 'loaded' : ''
+                }`}
                 onClick={() => handlePhotoClick(photoIndex)}
+                style={{ 
+                  animationDelay: isLoaded ? '0ms' : `${Math.min(colIndex * 20, 200)}ms` // Only animate first time
+                }}
               >
-                {loadingImages.has(photo.id) && (
+                {/* Skeleton loader while image loads */}
+                {!isLoaded && (
+                  <div className="photo-placeholder skeleton-loader absolute inset-0" />
+                )}
+                
+                {/* Loading spinner overlay */}
+                {isLoading && (
                   <div className="absolute inset-0 flex items-center justify-center z-10">
-                    <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+                    <div className="loading-spinner">
+                      <Loader2 className="w-6 h-6 text-gray-400" />
+                    </div>
                   </div>
                 )}
+                
                 <img
                   src={getThumbnailUrl(photo)}
                   alt={photo.filename}
                   className="w-full h-auto block"
                   loading="lazy"
                   onLoad={() => {
-                    setLoadingImages(prev => {
-                      const newSet = new Set(prev)
-                      newSet.delete(photo.id)
-                      return newSet
-                    })
+                    // Only update if not already loaded to prevent re-renders
+                    if (!loadedImages.has(photo.id)) {
+                      setLoadingImages(prev => {
+                        const newSet = new Set(prev)
+                        newSet.delete(photo.id)
+                        return newSet
+                      })
+                      setLoadedImages(prev => {
+                        const newSet = new Set(prev)
+                        newSet.add(photo.id)
+                        return newSet
+                      })
+                    }
                   }}
                   onError={(e) => {
                     const target = e.target as HTMLImageElement
@@ -225,6 +265,7 @@ export default function PhotoGridSimple({ photos, onLoadMore, hasMore, isLoading
                     setLoadingImages(prev => new Set(prev).add(photo.id))
                   }}
                 />
+                
                 {/* Minimal hover overlay */}
                 <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-1 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                   <p className="text-white text-[10px] truncate">{photo.filename}</p>

@@ -53,7 +53,9 @@ export default function ImageViewer({ photos, initialIndex, onClose, onRotationU
     if (preloadedImages.current[index]) return
     
     const img = new Image()
-    img.src = `${API_URL}/api/v1/thumbnails/${photos[index].id}/full`
+    const cacheBust = sessionStorage.getItem('cacheBust')
+    const url = `${API_URL}/api/v1/thumbnails/${photos[index].id}/full`
+    img.src = cacheBust ? `${url}?cb=${cacheBust}` : url
     img.onload = () => {
       preloadedImages.current[index] = img
       setImageLoaded(prev => ({ ...prev, [index]: true }))
@@ -217,6 +219,7 @@ export default function ImageViewer({ photos, initialIndex, onClose, onRotationU
   return (
     <div 
       ref={containerRef}
+      data-testid="image-viewer"
       className="fixed inset-0 bg-black z-[100] flex flex-col"
       onClick={(e) => {
         if (e.target === containerRef.current) {
@@ -232,6 +235,7 @@ export default function ImageViewer({ photos, initialIndex, onClose, onRotationU
               onClick={onClose}
               className="p-2 rounded-full bg-white/20 hover:bg-white/30 transition-colors"
               title="Close (Esc)"
+              aria-label="Close viewer"
             >
               <X className="w-5 h-5 text-white" />
             </button>
@@ -314,8 +318,8 @@ export default function ImageViewer({ photos, initialIndex, onClose, onRotationU
           }}
         >
           <img
-            src={`${API_URL}/api/v1/thumbnails/${currentPhoto.id}/full`}
-            alt={currentPhoto.filename}
+            src={`${API_URL}/api/v1/thumbnails/${currentPhoto.id}/full${sessionStorage.getItem('cacheBust') ? `?cb=${sessionStorage.getItem('cacheBust')}` : ''}`}
+            alt={`Full size image: ${currentPhoto.filename}`}
             className="max-w-full max-h-[90vh] object-contain"
             draggable={false}
           />
@@ -396,7 +400,7 @@ export default function ImageViewer({ photos, initialIndex, onClose, onRotationU
                 }`}
               >
                 <img
-                  src={`${API_URL}/api/v1/thumbnails/${photo.id}/150`}
+                  src={`${API_URL}/api/v1/thumbnails/${photo.id}/150${sessionStorage.getItem('cacheBust') ? `?cb=${sessionStorage.getItem('cacheBust')}` : ''}`}
                   alt={photo.filename}
                   className="w-12 h-12 object-cover rounded"
                 />
