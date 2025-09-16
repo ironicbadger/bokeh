@@ -20,7 +20,6 @@ class DirectoryScanner:
             '.tiff', '.tif', '.webp', '.heic', '.heif',
             '.cr3', '.cr2', '.nef', '.arw', '.dng', '.raf', '.orf'
         }
-        self.photos_to_process = []  # Collect photo IDs for thumbnail generation
         self.thumbnail_job_id = None  # Track thumbnail job
     
     def create_scan_job(self, scan_type: str) -> int:
@@ -44,8 +43,8 @@ class DirectoryScanner:
             job.started_at = datetime.utcnow()
             self.db.commit()
             
-            # Reset photo collection
-            self.photos_to_process = []
+            # Create thumbnail job at the start
+            self._create_thumbnail_job()
             
             if scan_type == "full":
                 self._full_scan(job)
@@ -57,9 +56,14 @@ class DirectoryScanner:
             job.progress = 100
             self.db.commit()
             
-            # Queue thumbnail generation if we have photos
-            if self.photos_to_process:
-                self._queue_thumbnail_generation()
+            # Mark thumbnail job as completed if it exists
+            if self.thumbnail_job_id:
+                thumb_job = self.db.query(Job).filter(Job.id == self.thumbnail_job_id).first()
+                if thumb_job and thumb_job.status != JobStatus.COMPLETED:
+                    thumb_job.status = JobStatus.COMPLETED
+                    thumb_job.completed_at = datetime.utcnow()
+                    thumb_job.progress = 100
+                    self.db.commit()
             
         except Exception as e:
             logger.error(f"Scan failed: {str(e)}")
@@ -136,6 +140,12 @@ class DirectoryScanner:
             existing = self.db.query(Photo).filter(Photo.file_hash == file_hash).first()
             if existing:
                 logger.debug(f"Photo already exists: {filename}")
+                # Check if it needs thumbnails
+                from models import Thumbnail
+                has_thumbnails = self.db.query(Thumbnail).filter(Thumbnail.photo_id == existing.id).first()
+                if not has_thumbnails:
+                    logger.info(f"Photo {filename} missing thumbnails, queueing generation")
+                    self._queue_single_thumbnail(existing.id)
                 return
             
             # Get file info
@@ -167,8 +177,8 @@ class DirectoryScanner:
             self.db.add(photo)
             self.db.commit()  # Commit to get photo ID
             
-            # Add to thumbnail processing queue
-            self.photos_to_process.append(photo.id)
+            # Queue thumbnail generation immediately for this photo
+            self._queue_single_thumbnail(photo.id)
             
             # Update folder stats
             if folder:
@@ -262,36 +272,58 @@ class DirectoryScanner:
         # Return metadata dict and separate date_taken
         return metadata, date_taken
     
-    def _queue_thumbnail_generation(self):
-        """Queue thumbnail generation as a separate job"""
+    def _create_thumbnail_job(self):
+        """Create a thumbnail generation job at the start of scanning"""
+        try:
+            # Check if there's already an active thumbnail job
+            existing = self.db.query(Job).filter(
+                Job.type == JobType.THUMBNAIL_GENERATION,
+                Job.status.in_([JobStatus.PENDING, JobStatus.RUNNING])
+            ).first()
+            
+            if not existing:
+                thumb_job = Job(
+                    type=JobType.THUMBNAIL_GENERATION,
+                    status=JobStatus.RUNNING,
+                    total_items=0,  # Will be updated as we go
+                    processed_items=0,
+                    payload={
+                        'photo_count': 0,
+                        'workers': 4,
+                        'scan_triggered': True
+                    }
+                )
+                self.db.add(thumb_job)
+                self.db.commit()
+                self.thumbnail_job_id = thumb_job.id
+                logger.info(f"Created thumbnail generation job {thumb_job.id}")
+            else:
+                self.thumbnail_job_id = existing.id
+                logger.info(f"Using existing thumbnail job {existing.id}")
+                
+        except Exception as e:
+            logger.error(f"Failed to create thumbnail job: {str(e)}")
+            
+    def _queue_single_thumbnail(self, photo_id: int):
+        """Queue thumbnail generation for a single photo immediately"""
         try:
             # Import here to avoid circular dependency
-            from tasks.thumbnails import process_thumbnail_batch
+            from tasks.thumbnails import generate_photo_thumbnails
             
-            # Create thumbnail generation job
-            total_photos = len(self.photos_to_process)
-            thumb_job = Job(
-                type=JobType.THUMBNAIL_GENERATION,
-                status=JobStatus.PENDING,
-                total_items=total_photos,  # Set total items for progress tracking
-                processed_items=0,
-                payload={
-                    'photo_count': total_photos,
-                    'workers': 8
-                }
-            )
-            self.db.add(thumb_job)
-            self.db.commit()
+            # Queue the single photo thumbnail generation
+            generate_photo_thumbnails.delay(photo_id)
             
-            # Process in batches
-            batch_size = 80  # Process 80 photos at a time (10 per worker)
-            for i in range(0, len(self.photos_to_process), batch_size):
-                batch = self.photos_to_process[i:i + batch_size]
-                # Queue the task asynchronously with batch index for tracking
-                batch_index = i // batch_size
-                process_thumbnail_batch.delay(batch, thumb_job.id, batch_index, total_photos)
+            # Update thumbnail job stats if we have one
+            if self.thumbnail_job_id:
+                thumb_job = self.db.query(Job).filter(Job.id == self.thumbnail_job_id).first()
+                if thumb_job:
+                    thumb_job.total_items = (thumb_job.total_items or 0) + 1
+                    if thumb_job.payload is None:
+                        thumb_job.payload = {}
+                    thumb_job.payload['photo_count'] = thumb_job.total_items
+                    self.db.commit()
             
-            logger.info(f"Queued thumbnail generation for {len(self.photos_to_process)} photos")
+            logger.debug(f"Queued thumbnail generation for photo {photo_id}")
             
         except Exception as e:
-            logger.error(f"Failed to queue thumbnail generation: {str(e)}")
+            logger.error(f"Failed to queue thumbnail for photo {photo_id}: {str(e)}")

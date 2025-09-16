@@ -45,11 +45,27 @@ class ThumbnailService:
             file_ext = os.path.splitext(photo.filepath)[1].lower()
             
             if file_ext in ['.cr3', '.cr2', '.nef', '.arw', '.dng', '.raf', '.orf'] and RAWPY_AVAILABLE:
-                # Handle RAW files with rawpy
+                # Handle RAW files with rawpy - use embedded thumbnail for performance
                 try:
                     with rawpy.imread(photo.filepath) as raw:
-                        rgb = raw.postprocess()
-                        img = Image.fromarray(rgb)
+                        # Try to extract the embedded JPEG thumbnail first (much faster)
+                        try:
+                            thumb = raw.extract_thumb()
+                            if thumb.format == rawpy.ThumbFormat.JPEG:
+                                # Use the embedded JPEG thumbnail
+                                import io
+                                img = Image.open(io.BytesIO(thumb.data))
+                                logger.debug(f"Using embedded JPEG thumbnail for {photo.filename}")
+                            else:
+                                # No JPEG thumbnail, process the RAW data
+                                rgb = raw.postprocess(use_camera_wb=True, half_size=True)
+                                img = Image.fromarray(rgb)
+                                logger.debug(f"Processing RAW data for {photo.filename}")
+                        except Exception as e:
+                            # Fallback to full RAW processing
+                            logger.debug(f"No embedded thumbnail, processing RAW: {e}")
+                            rgb = raw.postprocess(use_camera_wb=True, half_size=True)
+                            img = Image.fromarray(rgb)
                 except Exception as e:
                     logger.warning(f"Failed to process RAW file with rawpy: {e}, falling back to PIL")
                     img = Image.open(photo.filepath)
@@ -119,6 +135,116 @@ class ThumbnailService:
                 
         except Exception as e:
             logger.error(f"Error generating thumbnails for photo {photo_id}: {str(e)}")
+            self.db.rollback()
+        
+        return generated
+    
+    def generate_single_thumbnail(self, photo_id: int, size: str) -> Dict[str, Dict]:
+        """Generate a single thumbnail size for a photo (used for on-demand generation)"""
+        photo = self.db.query(Photo).filter(Photo.id == photo_id).first()
+        if not photo:
+            logger.error(f"Photo {photo_id} not found")
+            return {}
+        
+        if size not in self.sizes:
+            logger.error(f"Invalid thumbnail size: {size}")
+            return {}
+        
+        generated = {}
+        
+        try:
+            # Check if it's a RAW file that needs special handling
+            file_ext = os.path.splitext(photo.filepath)[1].lower()
+            
+            if file_ext in ['.cr3', '.cr2', '.nef', '.arw', '.dng', '.raf', '.orf'] and RAWPY_AVAILABLE:
+                # Handle RAW files with rawpy
+                try:
+                    import io
+                    with rawpy.imread(photo.filepath) as raw:
+                        try:
+                            thumb = raw.extract_thumb()
+                            if thumb.format == rawpy.ThumbFormat.JPEG:
+                                img = Image.open(io.BytesIO(thumb.data))
+                            else:
+                                rgb = raw.postprocess(use_camera_wb=True, half_size=True)
+                                img = Image.fromarray(rgb)
+                        except:
+                            rgb = raw.postprocess(use_camera_wb=True, half_size=True)
+                            img = Image.fromarray(rgb)
+                except Exception as e:
+                    logger.warning(f"Failed to process RAW file with rawpy: {e}")
+                    img = Image.open(photo.filepath)
+            else:
+                img = Image.open(photo.filepath)
+            
+            from PIL import ImageOps
+            with img:
+                # Apply EXIF orientation
+                try:
+                    img = ImageOps.exif_transpose(img) or img
+                except Exception:
+                    pass
+                
+                # Apply user rotation if present
+                total_rotation = photo.user_rotation or 0
+                if total_rotation != 0:
+                    img = img.rotate(-total_rotation, expand=True)
+                
+                # Convert RGBA to RGB if necessary
+                if img.mode in ('RGBA', 'LA'):
+                    background = Image.new('RGB', img.size, (255, 255, 255))
+                    background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+                    img = background
+                elif img.mode not in ('RGB', 'L'):
+                    img = img.convert('RGB')
+                
+                # Generate just the requested size
+                thumbnail = img.copy()
+                dimensions = self.sizes[size]
+                thumbnail.thumbnail(dimensions, Image.Resampling.LANCZOS)
+                
+                # Save with versioned filename
+                rotation_version = photo.rotation_version or 0
+                filename = f"{photo_id}_{size}_v{rotation_version}.jpg"
+                filepath = os.path.join(self.thumbnails_path, filename)
+                thumbnail.save(filepath, 'JPEG', quality=95, optimize=True, progressive=True)
+                
+                generated[size] = {
+                    'filepath': filepath,
+                    'file_size': os.path.getsize(filepath),
+                    'width': thumbnail.width,
+                    'height': thumbnail.height
+                }
+                
+                # Save to database
+                existing = self.db.query(Thumbnail).filter(
+                    Thumbnail.photo_id == photo_id,
+                    Thumbnail.size == size,
+                    Thumbnail.format == 'jpeg'
+                ).first()
+                
+                if existing:
+                    existing.filepath = filepath
+                    existing.file_size = generated[size]['file_size']
+                    existing.width = thumbnail.width
+                    existing.height = thumbnail.height
+                else:
+                    thumb_record = Thumbnail(
+                        photo_id=photo_id,
+                        size=size,
+                        format='jpeg',
+                        filepath=filepath,
+                        file_size=generated[size]['file_size'],
+                        width=thumbnail.width,
+                        height=thumbnail.height
+                    )
+                    self.db.add(thumb_record)
+                
+                self.db.commit()
+                logger.info(f"Generated {size} thumbnail on-demand for photo {photo_id}")
+                
+        except Exception as e:
+            logger.error(f"Error generating single thumbnail for photo {photo_id}: {str(e)}")
             self.db.rollback()
         
         return generated

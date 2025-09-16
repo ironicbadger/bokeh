@@ -39,6 +39,7 @@ services:
       - THUMBNAILS_PATH=/app/thumbnails
       - SECRET_KEY=dev-secret-key
       - DEBUG=true
+      - ENVIRONMENT=development
     volumes:
       - ./backend:/app
       - /Users/alex/Pictures/test-images:/photos:ro

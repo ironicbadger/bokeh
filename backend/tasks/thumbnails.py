@@ -63,11 +63,27 @@ class ThumbnailWorker:
             file_ext = os.path.splitext(filepath)[1].lower()
             
             if file_ext in ['.cr3', '.cr2', '.nef', '.arw', '.dng', '.raf', '.orf'] and RAWPY_AVAILABLE:
-                # Handle RAW files with rawpy
+                # Handle RAW files with rawpy - use embedded thumbnail for performance
                 try:
+                    import io
                     with rawpy.imread(filepath) as raw:
-                        rgb = raw.postprocess()
-                        img = Image.fromarray(rgb)
+                        # Try to extract the embedded JPEG thumbnail first (much faster)
+                        try:
+                            thumb = raw.extract_thumb()
+                            if thumb.format == rawpy.ThumbFormat.JPEG:
+                                # Use the embedded JPEG thumbnail
+                                img = Image.open(io.BytesIO(thumb.data))
+                                logger.debug(f"Using embedded JPEG thumbnail for {filepath}")
+                            else:
+                                # No JPEG thumbnail, process the RAW data
+                                rgb = raw.postprocess(use_camera_wb=True, half_size=True)
+                                img = Image.fromarray(rgb)
+                                logger.debug(f"Processing RAW data for {filepath}")
+                        except Exception as e:
+                            # Fallback to full RAW processing
+                            logger.debug(f"No embedded thumbnail, processing RAW: {e}")
+                            rgb = raw.postprocess(use_camera_wb=True, half_size=True)
+                            img = Image.fromarray(rgb)
                 except Exception as e:
                     logger.warning(f"Failed to process RAW file {filepath} with rawpy: {e}")
                     # Try to fall back to PIL (though it likely won't work)

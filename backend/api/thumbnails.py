@@ -22,8 +22,8 @@ async def get_full_image(
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
     
-    # Construct full path
-    full_path = os.path.join("/photos", photo.filepath)
+    # Construct full path - filepath already contains /photos prefix
+    full_path = photo.filepath if photo.filepath.startswith('/') else os.path.join("/photos", photo.filepath)
     
     if not os.path.exists(full_path):
         raise HTTPException(status_code=404, detail="Photo file not found")
@@ -31,21 +31,44 @@ async def get_full_image(
     # Check if file needs conversion for browser display
     file_ext = os.path.splitext(photo.filepath)[1].lower()
     
-    # For TIF/TIFF files and other formats that browsers can't display, convert to JPEG
-    if file_ext in ['.tif', '.tiff', '.nef', '.cr2', '.cr3', '.arw', '.dng', '.raf', '.orf']:
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Full image request for photo {photo_id}, ext: {file_ext}, path: {full_path}")
+    
+    # For HEIC/HEIF, TIF/TIFF files and other formats that browsers can't display, convert to JPEG
+    if file_ext in ['.heic', '.heif', '.tif', '.tiff', '.nef', '.cr2', '.cr3', '.arw', '.dng', '.raf', '.orf']:
+        logger.info(f"Converting {file_ext} to JPEG for browser display")
         try:
+            # Handle HEIC/HEIF files (pillow-heif should already be registered)
+            if file_ext in ['.heic', '.heif']:
+                # pillow-heif registers automatically, so PIL can open these
+                logger.info(f"Opening HEIC/HEIF file with PIL")
+                img = Image.open(full_path)
             # Try to handle RAW files with rawpy if available
-            if file_ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raf', '.orf']:
+            elif file_ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raf', '.orf']:
                 try:
                     import rawpy
+                    # io is already imported at top of file
                     with rawpy.imread(full_path) as raw:
-                        rgb = raw.postprocess()
-                        img = Image.fromarray(rgb)
+                        # Try to extract the embedded JPEG thumbnail first (much faster and consistent)
+                        try:
+                            thumb = raw.extract_thumb()
+                            if thumb.format == rawpy.ThumbFormat.JPEG:
+                                # Use the embedded JPEG thumbnail
+                                img = Image.open(io.BytesIO(thumb.data))
+                            else:
+                                # No JPEG thumbnail, process the RAW data
+                                rgb = raw.postprocess(use_camera_wb=True, half_size=False)
+                                img = Image.fromarray(rgb)
+                        except Exception:
+                            # Fallback to full RAW processing
+                            rgb = raw.postprocess(use_camera_wb=True, half_size=False)
+                            img = Image.fromarray(rgb)
                 except (ImportError, Exception):
                     # Fall back to regular PIL if rawpy fails
                     img = Image.open(full_path)
             else:
-                # Open regular image files
+                # Open TIF/TIFF and other image files
                 img = Image.open(full_path)
             
             with img:
@@ -72,16 +95,37 @@ async def get_full_image(
                 img.save(buffer, 'JPEG', quality=95, optimize=True, progressive=True)
                 buffer.seek(0)
                 
+                # Add proper cache headers
+                import hashlib
+                content = buffer.getvalue()
+                etag = hashlib.md5(content).hexdigest()
+                
                 return Response(
-                    content=buffer.getvalue(),
+                    content=content,
                     media_type="image/jpeg",
-                    headers={"Cache-Control": "public, max-age=3600"}
+                    headers={
+                        "Cache-Control": "no-cache, no-store, must-revalidate" if (os.getenv("NODE_ENV") == "development" or os.getenv("ENVIRONMENT") == "development") else "public, max-age=86400, must-revalidate",
+                        "Pragma": "no-cache" if (os.getenv("NODE_ENV") == "development" or os.getenv("ENVIRONMENT") == "development") else None,
+                        "Expires": "0" if (os.getenv("NODE_ENV") == "development" or os.getenv("ENVIRONMENT") == "development") else None,
+                        "ETag": f'"{etag}"'
+                    } | {k: v for k, v in {"Pragma": "no-cache" if (os.getenv("NODE_ENV") == "development" or os.getenv("ENVIRONMENT") == "development") else None}.items() if v is not None}
                 )
         except Exception as e:
             # If conversion fails, try to return the original
+            logger.error(f"Failed to convert {file_ext} file: {str(e)}")
+            # Add proper cache headers
+            import hashlib
+            stat = os.stat(full_path)
+            etag_source = f"{full_path}-{stat.st_size}-{stat.st_mtime}"
+            etag = hashlib.md5(etag_source.encode()).hexdigest()
+            
             return FileResponse(
                 full_path,
-                media_type=photo.mime_type or "image/jpeg"
+                media_type=photo.mime_type or "image/jpeg",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate" if (os.getenv("NODE_ENV") == "development" or os.getenv("ENVIRONMENT") == "development") else "public, max-age=86400, must-revalidate",
+                    "ETag": f'"{etag}"'
+                }
             )
     else:
         # For supported formats, check if user rotation is applied
@@ -113,10 +157,18 @@ async def get_full_image(
                     img.save(buffer, format, quality=95, optimize=True)
                     buffer.seek(0)
                     
+                    # Add proper cache headers
+                    import hashlib
+                    content = buffer.getvalue()
+                    etag = hashlib.md5(content).hexdigest()
+                    
                     return Response(
-                        content=buffer.getvalue(),
+                        content=content,
                         media_type=photo.mime_type or "image/jpeg",
-                        headers={"Cache-Control": "public, max-age=3600"}
+                        headers={
+                            "Cache-Control": "public, max-age=86400, must-revalidate",  # 1 day cache
+                            "ETag": f'"{etag}"'
+                        }
                     )
             except Exception:
                 # If processing fails, return original
@@ -126,9 +178,19 @@ async def get_full_image(
                 )
         else:
             # No rotation needed, return original file
+            # Add proper cache headers
+            import hashlib
+            stat = os.stat(full_path)
+            etag_source = f"{full_path}-{stat.st_size}-{stat.st_mtime}"
+            etag = hashlib.md5(etag_source.encode()).hexdigest()
+            
             return FileResponse(
                 full_path,
-                media_type=photo.mime_type or "image/jpeg"
+                media_type=photo.mime_type or "image/jpeg",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate" if (os.getenv("NODE_ENV") == "development" or os.getenv("ENVIRONMENT") == "development") else "public, max-age=86400, must-revalidate",
+                    "ETag": f'"{etag}"'
+                }
             )
 
 @router.get("/{photo_id}/{size}")
@@ -139,6 +201,9 @@ async def get_thumbnail(
     v: str = None,  # Version parameter for cache busting
     db: Session = Depends(get_db)
 ):
+    import os
+    import hashlib
+    
     # Validate size
     if size not in ["150", "400", "1200"]:
         raise HTTPException(status_code=400, detail="Invalid thumbnail size")
@@ -156,11 +221,33 @@ async def get_thumbnail(
     
     # Check if versioned thumbnail exists
     if os.path.exists(versioned_filepath):
-        # Serve the versioned thumbnail
+        # Serve the versioned thumbnail with proper cache headers
+        # Use strong caching but allow revalidation on hard refresh
         media_type = "image/jpeg"
-        headers = {
-            "Cache-Control": "public, max-age=31536000, immutable"  # Cache forever with version
-        }
+        
+        # Get file stats for ETag
+        stat = os.stat(versioned_filepath)
+        # Create ETag from file path, size, and mtime
+        etag_source = f"{versioned_filepath}-{stat.st_size}-{stat.st_mtime}"
+        etag = hashlib.md5(etag_source.encode()).hexdigest()
+        
+        # Check if we're in development mode
+        is_development = os.getenv("NODE_ENV") == "development" or os.getenv("ENVIRONMENT") == "development"
+        
+        if is_development:
+            # Aggressive no-cache for development
+            headers = {
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "ETag": f'"{etag}"'
+            }
+        else:
+            # Production caching
+            headers = {
+                "Cache-Control": "public, max-age=2592000, must-revalidate",  # 30 days cache
+                "ETag": f'"{etag}"'
+            }
         return FileResponse(versioned_filepath, media_type=media_type, headers=headers)
     
     # Fallback to old naming convention for backward compatibility
@@ -168,15 +255,80 @@ async def get_thumbnail(
     old_filepath = os.path.join(thumbnails_path, old_filename)
     
     if os.path.exists(old_filepath):
-        # Serve old thumbnail with shorter cache
+        # Serve old thumbnail with proper cache headers
         media_type = "image/jpeg"
-        headers = {
-            "Cache-Control": "public, max-age=3600"  # 1 hour cache for old thumbnails
-        }
+        
+        # Get file stats for ETag
+        stat = os.stat(old_filepath)
+        etag_source = f"{old_filepath}-{stat.st_size}-{stat.st_mtime}"
+        etag = hashlib.md5(etag_source.encode()).hexdigest()
+        
+        # Check if we're in development mode
+        is_development = os.getenv("NODE_ENV") == "development" or os.getenv("ENVIRONMENT") == "development"
+        
+        if is_development:
+            headers = {
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "ETag": f'"{etag}"'
+            }
+        else:
+            headers = {
+                "Cache-Control": "public, max-age=3600, must-revalidate",  # 1 hour cache
+                "ETag": f'"{etag}"'
+            }
         return FileResponse(old_filepath, media_type=media_type, headers=headers)
     
-    # TODO: Generate thumbnail on the fly if it doesn't exist
-    raise HTTPException(status_code=404, detail="Thumbnail not found")
+    # Generate thumbnail on the fly if it doesn't exist
+    # This ensures photos appear immediately even before background processing
+    from services.thumbnail_service import ThumbnailService
+    
+    try:
+        service = ThumbnailService(db)
+        # Generate just the requested size, not all sizes
+        generated = service.generate_single_thumbnail(photo_id, size)
+        if generated and size in generated:
+            thumbnail_path = generated[size]['filepath']
+            if os.path.exists(thumbnail_path):
+                media_type = "image/jpeg"
+                stat = os.stat(thumbnail_path)
+                etag_source = f"{thumbnail_path}-{stat.st_size}-{stat.st_mtime}"
+                etag = hashlib.md5(etag_source.encode()).hexdigest()
+                
+                headers = {
+                    "Cache-Control": "no-cache, must-revalidate",  # Short cache for on-the-fly generated
+                    "ETag": f'"{etag}"'
+                }
+                return FileResponse(thumbnail_path, media_type=media_type, headers=headers)
+    except Exception as e:
+        # Log but don't fail - return placeholder instead
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to generate thumbnail for photo {photo_id}: {e}")
+    
+    # Return a placeholder image if all else fails
+    # Create a simple gray placeholder
+    from PIL import Image
+    import io
+    
+    size_map = {"150": 150, "400": 400, "1200": 1200}
+    dimension = size_map.get(size, 400)
+    
+    # Create a gray placeholder with text
+    placeholder = Image.new('RGB', (dimension, dimension), color=(60, 60, 60))
+    buffer = io.BytesIO()
+    placeholder.save(buffer, 'JPEG', quality=85)
+    buffer.seek(0)
+    
+    return Response(
+        content=buffer.getvalue(),
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-cache, no-store",  # Don't cache placeholders
+            "X-Placeholder": "true"
+        }
+    )
 
 from pydantic import BaseModel
 
