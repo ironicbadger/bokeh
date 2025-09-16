@@ -14,7 +14,7 @@ router = APIRouter()
 async def list_photos(
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=500),  # Increased default and max
-    sort: str = Query("date_taken", regex="^(date_taken|filename|size|rating)$"),
+    sort: str = Query("created_at", regex="^(created_at|date_taken|filename|size|rating)$"),
     order: str = Query("desc", regex="^(asc|desc)$"),
     db: Session = Depends(get_db)
 ):
@@ -60,6 +60,7 @@ async def list_photos(
             "width": photo.width,
             "height": photo.height,
             "date_taken": photo.date_taken.isoformat() if photo.date_taken else None,
+            "created_at": photo.created_at.isoformat() if photo.created_at else None,
             "camera_make": photo.camera_make,
             "camera_model": photo.camera_model,
             "rating": photo.rating,
@@ -84,20 +85,92 @@ async def list_photos(
         }
     }
 
-@router.patch("/{photo_id}/favorite")
-async def toggle_favorite(photo_id: int, db: Session = Depends(get_db)):
-    """Toggle favorite status for a photo"""
-    photo = db.query(Photo).filter(Photo.id == photo_id).first()
-    if not photo:
-        raise HTTPException(status_code=404, detail="Photo not found")
+@router.get("/count")
+async def get_photo_count(db: Session = Depends(get_db)):
+    """Get count of photos with thumbnails"""
+    from models import Thumbnail
     
-    photo.is_favorite = not photo.is_favorite
-    db.commit()
+    # Count photos that have thumbnails
+    subquery = db.query(Thumbnail.photo_id).filter(
+        Thumbnail.size == "400"
+    ).distinct().subquery()
+    
+    count = db.query(Photo).filter(
+        Photo.is_deleted == False,
+        Photo.id.in_(subquery)
+    ).count()
+    
+    # Also get the latest photo's created_at for reference
+    latest_photo = db.query(Photo).filter(
+        Photo.is_deleted == False,
+        Photo.id.in_(subquery)
+    ).order_by(Photo.created_at.desc()).first()
     
     return {
-        "message": "Favorite toggled",
-        "photo_id": photo_id,
-        "is_favorite": photo.is_favorite
+        "count": count,
+        "latest_created_at": latest_photo.created_at.isoformat() if latest_photo else None
+    }
+
+@router.get("/recent")
+async def get_recent_photos(
+    since: Optional[str] = Query(None, description="ISO timestamp to get photos created after"),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db)
+):
+    """Get photos added since a specific timestamp"""
+    from datetime import datetime
+    from models import Thumbnail
+    
+    # Only get photos that have thumbnails
+    subquery = db.query(Thumbnail.photo_id).filter(
+        Thumbnail.size == "400"
+    ).subquery()
+    
+    query = db.query(Photo).filter(
+        Photo.is_deleted == False,
+        Photo.id.in_(subquery)
+    )
+    
+    # Filter by timestamp if provided
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.replace('Z', '+00:00'))
+            query = query.filter(Photo.created_at > since_dt)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid timestamp format")
+    
+    # Order by created_at desc to get newest first
+    photos = query.order_by(Photo.created_at.desc()).limit(limit).all()
+    
+    # Convert to response format
+    photo_list = []
+    for photo in photos:
+        photo_dict = {
+            "id": photo.id,
+            "filename": photo.filename,
+            "file_size": photo.file_size,
+            "mime_type": photo.mime_type,
+            "width": photo.width,
+            "height": photo.height,
+            "date_taken": photo.date_taken.isoformat() if photo.date_taken else None,
+            "camera_make": photo.camera_make,
+            "camera_model": photo.camera_model,
+            "rating": photo.rating,
+            "is_favorite": photo.is_favorite,
+            "rotation_version": photo.rotation_version or 0,
+            "final_rotation": photo.final_rotation or 0,
+            "created_at": photo.created_at.isoformat() if photo.created_at else None,
+            "thumbnails": {
+                "150": f"/api/v1/thumbnails/{photo.id}/150",
+                "400": f"/api/v1/thumbnails/{photo.id}/400",
+                "1200": f"/api/v1/thumbnails/{photo.id}/1200"
+            }
+        }
+        photo_list.append(photo_dict)
+    
+    return {
+        "data": photo_list,
+        "count": len(photo_list)
     }
 
 @router.get("/years")
@@ -215,12 +288,50 @@ async def get_photos_by_month(
         "photos": photos
     }
 
-@router.get("/{photo_id}", response_model=PhotoResponse)
+@router.get("/{photo_id}")
 async def get_photo(photo_id: int, db: Session = Depends(get_db)):
+    """Get a single photo by ID"""
     photo = db.query(Photo).filter(Photo.id == photo_id).first()
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
-    return photo
+    
+    # Return the same format as the list endpoint
+    return {
+        "id": photo.id,
+        "filename": photo.filename,
+        "file_size": photo.file_size,
+        "mime_type": photo.mime_type,
+        "width": photo.width,
+        "height": photo.height,
+        "date_taken": photo.date_taken.isoformat() if photo.date_taken else None,
+        "camera_make": photo.camera_make,
+        "camera_model": photo.camera_model,
+        "rating": photo.rating,
+        "is_favorite": photo.is_favorite,
+        "rotation_version": photo.rotation_version or 0,
+        "final_rotation": photo.final_rotation or 0,
+        "thumbnails": {
+            "150": f"/api/v1/thumbnails/{photo.id}/150",
+            "400": f"/api/v1/thumbnails/{photo.id}/400",
+            "1200": f"/api/v1/thumbnails/{photo.id}/1200"
+        }
+    }
+
+@router.patch("/{photo_id}/favorite")
+async def toggle_favorite(photo_id: int, db: Session = Depends(get_db)):
+    """Toggle favorite status for a photo"""
+    photo = db.query(Photo).filter(Photo.id == photo_id).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    
+    photo.is_favorite = not photo.is_favorite
+    db.commit()
+    
+    return {
+        "message": "Favorite toggled",
+        "photo_id": photo_id,
+        "is_favorite": photo.is_favorite
+    }
 
 @router.post("/import")
 async def import_photos(

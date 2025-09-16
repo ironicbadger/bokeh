@@ -1,22 +1,34 @@
-import { useState, useEffect } from 'react'
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { useState, useEffect, useRef } from 'react'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/router'
 import Head from 'next/head'
 import PhotoGridSimple from '@/components/PhotoGridSimple'
 import YearView from '@/components/YearView'
 import FilesView from '@/components/FilesView'
 import ViewModeSelector, { ViewMode } from '@/components/ViewModeSelector'
+import SortSelector from '@/components/SortSelector'
 import StatusBar from '@/components/StatusBar'
-import { fetchPhotos } from '@/lib/api'
+import { fetchPhotos, fetchPhotoCount, fetchRecentPhotos, SortBy, Photo } from '@/lib/api'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export default function Home() {
   const router = useRouter()
+  const queryClient = useQueryClient()
   const [importStatus, setImportStatus] = useState<string | null>(null)
   const [hasActiveJobs, setHasActiveJobs] = useState(false)
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc')
+  const [sortBy, setSortBy] = useState<SortBy>(() => {
+    // Load saved sort preference
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('photoSortBy') as SortBy) || 'created_at'
+    }
+    return 'created_at'
+  })
   const [thumbnailVersions, setThumbnailVersions] = useState<Map<number, number>>(new Map())
+  const [lastPhotoCount, setLastPhotoCount] = useState<number>(0)
+  const [latestCreatedAt, setLatestCreatedAt] = useState<string | null>(null)
+  const newPhotosRef = useRef<Photo[]>([])
   
   // Get view mode from URL or default to 'grid'
   const viewMode = (router.query.view as ViewMode) || 'grid'
@@ -67,6 +79,52 @@ export default function Home() {
     setHasActiveJobs(activeJobs.length > 0)
   }, [jobsData])
 
+  // Poll photo count to detect new photos
+  const { data: photoCountData } = useQuery({
+    queryKey: ['photoCount'],
+    queryFn: fetchPhotoCount,
+    refetchInterval: hasActiveJobs ? 2000 : 10000, // Poll more frequently during active jobs
+    enabled: viewMode === 'grid' // Only poll in grid view
+  })
+
+  // Load new photos when count increases
+  useEffect(() => {
+    if (!photoCountData) return
+    
+    const currentCount = photoCountData.count
+    
+    // If this is first load, just set the count
+    if (lastPhotoCount === 0) {
+      setLastPhotoCount(currentCount)
+      setLatestCreatedAt(photoCountData.latest_created_at)
+      return
+    }
+    
+    // If count increased, fetch the new photos
+    if (currentCount > lastPhotoCount && latestCreatedAt) {
+      fetchRecentPhotos(latestCreatedAt, currentCount - lastPhotoCount + 10) // Get a few extra to be safe
+        .then(response => {
+          if (response.data.length > 0) {
+            // Store new photos to prepend to grid
+            newPhotosRef.current = response.data
+            
+            // If sorting by created_at, trigger a refresh of the first page
+            if (sortBy === 'created_at') {
+              queryClient.invalidateQueries(['photos', sortOrder, sortBy])
+            }
+            
+            // Update counts
+            setLastPhotoCount(currentCount)
+            setLatestCreatedAt(photoCountData.latest_created_at)
+            
+            // Show notification (optional)
+            console.log(`${response.data.length} new photos added`)
+          }
+        })
+        .catch(err => console.error('Failed to fetch new photos:', err))
+    }
+  }, [photoCountData, lastPhotoCount, latestCreatedAt, sortBy, sortOrder, queryClient])
+
   const {
     data,
     fetchNextPage,
@@ -76,8 +134,8 @@ export default function Home() {
     error,
     refetch
   } = useInfiniteQuery({
-    queryKey: ['photos', sortOrder],
-    queryFn: ({ pageParam = 1 }) => fetchPhotos(pageParam, sortOrder, 100),  // 100 per page
+    queryKey: ['photos', sortOrder, sortBy],
+    queryFn: ({ pageParam = 1 }) => fetchPhotos(pageParam, sortOrder, 100, sortBy),  // 100 per page
     getNextPageParam: (lastPage, pages) => {
       const currentPage = pages.length
       const totalPages = Math.ceil(lastPage.pagination.total / lastPage.pagination.per_page)
@@ -150,38 +208,30 @@ export default function Home() {
       {viewMode === 'grid' ? (
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 mt-16 mb-12">
           {/* Sort Controls */}
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-4">
-              <span className="text-sm font-medium text-gray-700">Sort by Date:</span>
-              <div className="flex gap-2">
-                <button
-                onClick={() => setSortOrder('desc')}
-                className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                  sortOrder === 'desc'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-              >
-                Newest First
-              </button>
-              <button
-                onClick={() => setSortOrder('asc')}
-                className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                  sortOrder === 'asc'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-              >
-                Oldest First
-              </button>
-            </div>
+          <div className="mb-4">
+            <SortSelector
+              currentSort={sortBy}
+              sortOrder={sortOrder}
+              onSortChange={(newSort) => {
+                setSortBy(newSort)
+                // Save preference to localStorage
+                localStorage.setItem('photoSortBy', newSort)
+              }}
+              onOrderToggle={() => {
+                setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')
+              }}
+            />
           </div>
           {data && (
-            <div className="text-sm text-gray-600">
+            <div className="text-sm text-gray-600 mb-2">
               {data.pages[0]?.pagination?.total || 0} photos
+              {hasActiveJobs && (
+                <span className="ml-2 text-blue-500 animate-pulse">
+                  • Scanning for new photos...
+                </span>
+              )}
             </div>
           )}
-        </div>
 
         {isLoading ? (
           <div className="flex justify-center items-center h-64">
