@@ -1,6 +1,40 @@
 # Claude Development Instructions for Bokeh
 
-## 📅 Recent Work Completed (2025-01-15)
+## 📚 Documentation
+For detailed technical documentation on specific features, see the `docs/` directory:
+- **`docs/CACHE_MANAGEMENT.md`** - Cache invalidation system, development mode headers, Clear Cache button implementation, and RAW file thumbnail consistency
+- **`docs/AUTO_RELOAD_SYSTEM.md`** - Auto-reload system for real-time photo grid updates during scanning, smart polling, and sort options
+
+## 📅 Recent Work Completed (2025-01-16)
+
+### Latest Session Updates - Auto-Reload System & Sort Options
+Implemented real-time photo grid updates with automatic refresh during scanning and new sorting options.
+
+#### 1. **Auto-Reload System**
+- **Smart polling**: Lightweight `/photos/count` endpoint polls every 2s during active jobs
+- **Incremental loading**: Only fetches new photos via `/photos/recent` endpoint
+- **Automatic grid updates**: Photos appear automatically as thumbnails are generated
+- **Visual feedback**: "• Scanning for new photos..." indicator during active jobs
+
+#### 2. **Enhanced Sorting Options**
+- **"Most Recently Added"**: New default sort by `created_at` (when added to library)
+- **"Date Taken"**: Alternative sort by EXIF date
+- **Sort UI**: Clean toggle between sort modes with order controls
+- **Persistence**: Sort preference saved to localStorage
+
+#### 3. **New API Endpoints**
+- `GET /api/v1/photos/count` - Returns photo count and latest timestamp
+- `GET /api/v1/photos/recent?since={timestamp}` - Fetches only new photos
+- Updated `/api/v1/photos` to support `created_at` sorting
+
+#### 4. **Files Modified**
+- `backend/api/photos.py` - Added new endpoints and created_at sorting
+- `frontend/src/lib/api.ts` - Added TypeScript interfaces and new API functions
+- `frontend/src/components/SortSelector.tsx` - New sort UI component
+- `frontend/src/pages/index.tsx` - Auto-reload logic and polling
+- `docs/AUTO_RELOAD_SYSTEM.md` - Complete technical documentation
+
+## 📅 Previous Work (2025-01-15)
 
 ### Latest Session Updates - RAW File Support & Thumbnail Job Fixes
 Successfully implemented full RAW file support (CR3, CR2, NEF, ARW, DNG, RAF, ORF) with performant pre-generated thumbnails and fixed thumbnail generation job management.
